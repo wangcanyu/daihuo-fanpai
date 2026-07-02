@@ -1,3 +1,6 @@
+<p align="center"><img src="cover.png" width="760" alt="daihuo-fanpai"></p>
+<p align="center"><b>中文</b> · <a href="README.en.md">English</a></p>
+
 # daihuo-fanpai · 爆款带货短视频复刻 skill
 
 反推爆款带货短视频 → 迁移到你的产品 → 用即梦/Seedance 重新生成镜头 → 配音拼接成片。
