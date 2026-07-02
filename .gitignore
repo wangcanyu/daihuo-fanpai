@@ -1,0 +1,30 @@
+# 私有:千川方法论弹药包(从付费课程蒸馏,不公开发布)
+qianchuan/
+
+# 密钥 / 凭证(本项目所有 key 都从这些文件读,绝不入库)
+*.key
+*_key.txt
+*_key.b64
+ark_key*
+google_key*
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 运行产物 / 大文件(视频/音频/图片/中间件)
+runs/
+clips/
+output/
+audio/
+*.mp4
+*.wav
+*.mp3
+_tts_manifest.json
+*_cat.txt
+
+# 系统
+.DS_Store
+Thumbs.db
