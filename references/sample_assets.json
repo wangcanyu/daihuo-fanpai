@@ -1,0 +1,12 @@
+{
+  "host_anchor": "/mnt/e/jimeng/runs/shenapo_迁移/assets/host_anchor.jpg",
+  "product_desc": "高小参鲜蒸海参,深蓝金色包装",
+  "products": {
+    "hero": "/mnt/e/jimeng/runs/shenapo_迁移/assets/g6_海参正面_916.jpg",
+    "hero_alt": "/mnt/e/jimeng/runs/shenapo_迁移/assets/g3_海参剖面_916.jpg",
+    "礼盒": "/mnt/e/jimeng/runs/shenapo_迁移/assets/礼盒.png",
+    "内包装": "/mnt/e/jimeng/runs/shenapo_迁移/assets/内包装.png",
+    "单根": "/mnt/e/jimeng/runs/shenapo_迁移/assets/单根包装.png",
+    "独立": "/mnt/e/jimeng/runs/shenapo_迁移/assets/单根包装.png"
+  }
+}
