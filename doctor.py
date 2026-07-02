@@ -44,16 +44,15 @@ def check_dreamina():
 
 
 def check_ark():
-    f = os.path.expanduser("~/.hermes/ark_key.txt")
-    if not os.path.exists(f):
-        return BAD, "反推key缺失 → 凭证类,需用户提供 Seed2.1Pro key 存入 ~/.hermes/ark_key.txt"
-    n = len(open(f).read().strip())
-    return (OK, f"key就位({n}字节)") if n > 30 else (BAD, f"key异常({n}字节)")
+    import config
+    ok, msg = config.ark_key_status()
+    return (OK, "反推key " + msg) if ok else (BAD, "反推key缺失 → 设环境变量 ARK_API_KEY(见 config.py)")
 
 
 def check_cosyvoice():
-    py = "/home/administr/CosyVoice/.venv/bin/python"
-    model = "/home/administr/CosyVoice/pretrained_models"
+    from config import COSYVOICE_HOME
+    py = f"{COSYVOICE_HOME}/.venv/bin/python"
+    model = f"{COSYVOICE_HOME}/pretrained_models"
     if os.path.exists(py) and os.path.isdir(model):
         return OK, "CosyVoice 就位(本地配音可用)"
     return WARN, ("缺失 → 重型GPU依赖,不自动装。配音降级选项:"

@@ -16,7 +16,7 @@
 | 6个引擎脚本 | 随目录走,不用改 |
 | ffmpeg | 新机装(轻,doctor 会提示 `apt/brew install ffmpeg`) |
 | 即梦 CLI + 登录 | **新机重装+重登**(凭证不跟着走):`curl -fsSL https://jimeng.jianying.com/cli \| bash` 然后 `dreamina login` |
-| Seed2.1Pro key | **新机重放** `~/.hermes/ark_key.txt`(ark- 开头明文即可) |
+| Seed2.1Pro key | **新机重放** 设环境变量 `ARK_API_KEY`(ark- 开头) |
 | CosyVoice(配音) | 重型,新机大概率没有 → **走降级**(A模式复用原音最省,或云端TTS,或自备配音);别让 agent 闷头装 |
 
 ## C. 交接时对接手 agent 说什么(直接发这段)

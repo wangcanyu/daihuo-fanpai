@@ -15,9 +15,10 @@ tts_segments.py — 配音模块(口播+旁白)
 """
 import argparse, json, os, subprocess, tempfile
 
-COSY_PY = "/home/administr/CosyVoice/.venv/bin/python"
+from config import COSYVOICE_HOME
+COSY_PY = f"{COSYVOICE_HOME}/.venv/bin/python"
 COSY_DRAMA = os.path.expanduser("~/.claude/skills/tts-drama/scripts/cosy_drama.py")
-VDIR = "/home/administr/CosyVoice/asset/voices"
+VDIR = f"{COSYVOICE_HOME}/asset/voices"
 DEF_REF = f"{VDIR}/香香（女）上身有堆叠感，有余量感，穿上去慵懒又宽松，像主播这样子.wav"
 DEF_REF_TEXT = "上身有堆叠感，有余量感，穿上去慵懒又宽松，像主播这样子"
 # A(闺蜜挑衅) 默认音色:依秋
