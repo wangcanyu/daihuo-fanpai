@@ -11,7 +11,7 @@ import requests
 
 ARK_URL = "https://ark.cn-beijing.volces.com/api/v3/responses"
 ARK_MODEL = "ep-20260630203852-ncz29"
-KEY_FILE = os.path.expanduser("~/.hermes/ark_key.txt")
+from config import ark_key
 
 RUBRIC = """三看漏斗90分制(每项30):
 1 结构(30):单卖点贯穿=满分;多卖点/三段式/前3秒做前置动作(拆包装)=扣分
@@ -20,7 +20,7 @@ RUBRIC = """三看漏斗90分制(每项30):
 
 
 def call(video_path, prompt, timeout=400):
-    key = open(KEY_FILE).read().strip()
+    key = ark_key()
     b64 = base64.b64encode(open(video_path, "rb").read()).decode()
     body = {"model": ARK_MODEL,
             "input": [{"role": "user", "content": [

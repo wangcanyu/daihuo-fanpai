@@ -13,12 +13,12 @@ import requests
 
 BASE = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
 MODEL = "doubao-seedance-2-0-260128"   # ★火山必须用 Seedance 2.0(用户要求;支持图/视频/音频多模态参考)
-KEY_FILE = os.path.expanduser("~/.hermes/ark_key.txt")
+from config import ark_key
 NO_PROXY = {"http": None, "https": None}
 
 
 def _headers():
-    key = open(KEY_FILE).read().strip()
+    key = ark_key()
     return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
 

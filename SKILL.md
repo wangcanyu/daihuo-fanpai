@@ -95,7 +95,7 @@ python3 <engine>/doctor.py
 - **口型/音轨**:段配音 pad 到该段视频时长、对齐段起点;别用 `-map` 覆盖乱时轴。
 - **即梦**:seedance2.0_vip 必带 `--video_resolution`;含真人脸 image2video 易拦(纯产品图安全);内部硬切 ≤3(5崩);VIP并发=1串行。
 - **反推**:Seed2.1Pro 加 `thinking:disabled`+`stream`(快17倍不掉精度);火山**不走代理**;Bash默认2分超时会掐长请求→后台跑。
-- **key脱敏**:AIzaSy类key读文件会被截断→base64存(Gemini);ark key(ark-开头)不受影响,明文存 ~/.hermes/ark_key.txt。
+- **key脱敏**:AIzaSy类key读文件会被截断→base64存(Gemini);ark key(ark-开头)不受影响,用环境变量 ARK_API_KEY(见 config.py)。
 - **后台命令**:别同时用 `nohup &` + run_in_background(外层立即返回致误报completed)。
 
 ## 可移植性
