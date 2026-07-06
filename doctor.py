@@ -53,15 +53,19 @@ def check_cosyvoice():
     from config import COSYVOICE_HOME
     py = f"{COSYVOICE_HOME}/.venv/bin/python"
     model = f"{COSYVOICE_HOME}/pretrained_models"
+    drama = os.path.expanduser("~/.claude/skills/tts-drama/scripts/cosy_drama.py")
     if os.path.exists(py) and os.path.isdir(model):
-        return OK, "CosyVoice 就位(本地配音可用)"
+        if not os.path.exists(drama):
+            return WARN, "CosyVoice 在,但缺 tts-drama skill 的 cosy_drama.py(tts_segments 依赖它)"
+        return OK, "CosyVoice + cosy_drama 就位(本地配音可用)"
     return WARN, ("缺失 → 重型GPU依赖,不自动装。配音降级选项:"
                   "①A模式复用原片音频(无需TTS) ②接云端TTS ③用户自备音频 ④手动装CosyVoice")
 
 
 def check_proxy():
-    # 反推(火山)不走代理; 生成下载走代理。仅提示
-    return WARN, "代理:火山/即梦国内直连(不走代理);Gemini(可选)才需 127.0.0.1:7896"
+    # 全管线(火山API/即梦CLI/即梦CDN下载)均国内直连,无需任何代理。
+    # 系统若设了全局 http_proxy,脚本已显式绕开;极少数网络下载 CDN 需代理时设 DAIHUO_DOWNLOAD_PROXY。
+    return OK, "全链路国内直连,无需代理(代理是 Gemini 时代遗留,已退役)"
 
 
 def main():

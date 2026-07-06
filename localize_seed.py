@@ -17,7 +17,7 @@ facts.json 示例:
 import argparse, json, os, time, requests
 
 ARK_URL = "https://ark.cn-beijing.volces.com/api/v3/responses"
-ARK_MODEL = "ep-20260630203852-ncz29"
+from config import ARK_SEED_MODEL as ARK_MODEL   # 公共模型名,可用环境变量 ARK_SEED_MODEL 覆盖
 from config import ark_key
 # 脚本改写相关的弹药包(按重要性)
 QC_FILES = ["02-跨类目复制与机制.md", "01-选题与卖点.md", "03-句式库.md", "04-诊断rubric与红线.md"]

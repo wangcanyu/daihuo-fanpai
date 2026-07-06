@@ -15,9 +15,36 @@ gen_segments.py — 生成消费端(吃 plan_segments 的方案 → 串行调即
 """
 import argparse, json, os, re, subprocess, time, urllib.request
 
+from config import DOWNLOAD_PROXY
 DREAMINA = os.path.expanduser("~/.local/bin/dreamina")
-PROXY = {"https": "http://127.0.0.1:7896", "http": "http://127.0.0.1:7896"}
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def wav_dur(path):
+    try:
+        return float(subprocess.check_output(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", path]).strip())
+    except Exception:
+        return 0.0
+
+
+def fit_duration_to_audio(seg, audio_dir):
+    """★配音比规划时长长会被 assemble 掐掉半句话——口播段生成时长按实际 wav 自动上调(上限15s)"""
+    if seg["type"] != "mm" or not audio_dir:
+        return
+    wav = os.path.join(audio_dir, f"{seg['seg']}.wav")
+    if not os.path.exists(wav):
+        return
+    ad = wav_dur(wav)
+    if ad + 0.3 > seg["duration"]:
+        import math
+        new_d = min(15, math.ceil(ad + 0.5))
+        if new_d > seg["duration"]:
+            print(f"  [时长] 配音{ad:.1f}s > 规划{seg['duration']}s → 生成时长调为 {new_d}s")
+            seg["duration"] = new_d
+        if ad > 14.5:
+            print(f"  [⚠时长] 配音{ad:.1f}s 逼近 15s 上限,放不下会截尾——请回 plan 拆段或精简台词")
 
 
 def submit(seg, audio_dir):
@@ -43,11 +70,18 @@ def submit(seg, audio_dir):
 
 
 def robust_download(url, dst, retries=4):
-    """稳健下载: 重试 + 完整性校验(ContentTooShort/网络中断都重来)"""
-    op = urllib.request.build_opener(urllib.request.ProxyHandler(PROXY))
-    urllib.request.install_opener(op)
+    """稳健下载: 重试 + 完整性校验。即梦 CDN 国内直连,默认不走代理(显式绕开
+    系统 http_proxy 环境变量);设了 DAIHUO_DOWNLOAD_PROXY 才走,且直连失败时回退环境代理。"""
     last = None
     for i in range(retries):
+        if DOWNLOAD_PROXY:
+            handler = urllib.request.ProxyHandler({"http": DOWNLOAD_PROXY, "https": DOWNLOAD_PROXY})
+        elif i < 2:
+            handler = urllib.request.ProxyHandler({})          # 直连,屏蔽环境代理
+        else:
+            handler = urllib.request.ProxyHandler()            # 回退:跟随环境代理再试
+        op = urllib.request.build_opener(handler)
+        urllib.request.install_opener(op)
         try:
             urllib.request.urlretrieve(url, dst)
             if os.path.getsize(dst) > 10240:      # >10KB 视为有效
@@ -70,7 +104,7 @@ def wait_download(sid, dst, tries=40, gap=15):
                 return robust_download(u.group(1), dst)
         if '"gen_status": "fail"' in out or '"gen_status":"fail"' in out:
             fr = re.search(r'"fail_reason"\s*:\s*"([^"]+)"', out)
-            return -1 if not fr else f"FAIL: {fr.group(1)}"
+            return f"FAIL: {fr.group(1) if fr else '即梦返回失败,无 fail_reason'}"
         time.sleep(gap)
     return None  # 超时未完成
 
@@ -108,6 +142,7 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng"):
             except Exception as e:
                 print(f"  [ERR Ark {type(e).__name__}: {str(e)[:120]}]")
             continue
+        fit_duration_to_audio(seg, audio_dir)
         print(f"\n===== {name} {tag} {seg['duration']}s =====", flush=True)
         if dry:
             print("  [dry-run] cmd 略"); continue

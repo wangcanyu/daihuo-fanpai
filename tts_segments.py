@@ -32,16 +32,18 @@ CAN_WORDS = ["参加", "参与", "参考", "参观", "参谋", "参军", "参赛
              "参照", "参差", "参悟", "参禅", "参政", "参议", "参股", "参保"]
 
 
-def apply_pron_fix(text, extra=None):
+def apply_pron_fix(text, extra=None, haishen=True):
     # 1) 先按自定义词表替换(长词优先)
     if extra:
         for k in sorted(extra, key=len, reverse=True):
             text = text.replace(k, extra[k])
+    if not haishen:
+        return text
     # 2) 保护 cān/cēn 词
     holders = {}
     for i, w in enumerate(CAN_WORDS):
         if w in text:
-            h = f"{i}"; holders[h] = w; text = text.replace(w, h)
+            h = f"\x01{i}\x02"; holders[h] = w; text = text.replace(w, h)  # 控制字符占位,绝不能用裸数字(台词里全是价格数字)
     # 3) 全量 参(shēn) → 身(shēn 同音同调,单字不变长度)
     text = text.replace("参", "身")
     # 4) 还原被保护的词
@@ -64,11 +66,17 @@ def parse_speakers(text, default="B"):
     return res or [(default, text)]
 
 
-def synth(plan_path, out_dir, voices, instruct, pron_fix_path=None, default_spk="B"):
-    """voices: {说话人: {ref, ref_text}}。段内可含多说话人(A：/B：),分别合成再拼。"""
+def synth(plan_path, out_dir, voices, instruct, pron_fix_path=None, default_spk="B",
+          pron_profile="auto"):
+    """voices: {说话人: {ref, ref_text}}。段内可含多说话人(A：/B：),分别合成再拼。
+    pron_profile: auto=台词出现"海参"才启用参→身修正 | haishen=强制 | off=只用自定义词表"""
     segs = json.load(open(plan_path))
     os.makedirs(out_dir, exist_ok=True)
     extra = json.load(open(pron_fix_path)) if pron_fix_path and os.path.exists(pron_fix_path) else None
+    all_d = "".join(s.get("dialogue") or "" for s in segs)
+    haishen = (pron_profile == "haishen") or (pron_profile == "auto" and "海参" in all_d)
+    if haishen:
+        print("[tts] 海参读音修正已启用(参→身,CAN词黑名单保护)")
     lines, fixed_any, seg_subs = [], [], {}
     for s in segs:
         d = (s.get("dialogue") or "").strip()
@@ -79,7 +87,7 @@ def synth(plan_path, out_dir, voices, instruct, pron_fix_path=None, default_spk=
         for j, (spk, txt) in enumerate(subs):
             if spk not in voices:
                 spk = default_spk
-            t2 = apply_pron_fix(txt, extra)          # ★读音修正
+            t2 = apply_pron_fix(txt, extra, haishen)  # ★读音修正
             if t2 != txt:
                 fixed_any.append(s["seg"])
             sid = f"{s['seg']}__{j}"
@@ -126,7 +134,9 @@ if __name__ == "__main__":
     ap.add_argument("--voice-a-text", default=DEF_A_TEXT)
     ap.add_argument("--instruct", default="热情有感染力、语速偏快的女带货主播语气")
     ap.add_argument("--pron-fix", default=None, help="自定义读音修正表 json {\"词\":\"同音替换\"}")
+    ap.add_argument("--pron-profile", choices=["auto", "haishen", "off"], default="auto",
+                    help="参→身修正: auto=台词含'海参'才启用 | haishen=强制 | off=只用自定义词表")
     a = ap.parse_args()
     voices = {"B": {"ref": a.voice_ref, "ref_text": a.voice_ref_text},
               "A": {"ref": a.voice_a, "ref_text": a.voice_a_text}}
-    synth(a.plan, a.out_dir, voices, a.instruct, a.pron_fix)
+    synth(a.plan, a.out_dir, voices, a.instruct, a.pron_fix, pron_profile=a.pron_profile)
