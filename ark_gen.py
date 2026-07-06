@@ -25,9 +25,11 @@ def _headers():
 def submit_i2v(image_path, prompt, duration=5, resolution="720p", ratio="9:16"):
     """image2video: 传首帧真图 + 文本指令。返回 task id。"""
     img = base64.b64encode(open(image_path, "rb").read()).decode()
+    mime = "image/png" if image_path.lower().endswith(".png") else \
+           "image/webp" if image_path.lower().endswith(".webp") else "image/jpeg"
     text = f"{prompt} --resolution {resolution} --duration {duration} --ratio {ratio}"
     body = {"model": MODEL, "content": [
-        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}},
+        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{img}"}},
         {"type": "text", "text": text}]}
     r = requests.post(BASE, headers=_headers(), json=body, proxies=NO_PROXY, timeout=60)
     r.raise_for_status()

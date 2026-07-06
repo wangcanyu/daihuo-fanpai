@@ -34,3 +34,11 @@ def ark_key_status():
 
 
 COSYVOICE_HOME = os.environ.get("COSYVOICE_HOME", os.path.expanduser("~/CosyVoice"))
+
+# 反推/评委用的 Seed 模型:公共模型名直调(实测可用),不再依赖私人 endpoint ID(ep-xxx)。
+# 换模型/换 endpoint 用环境变量覆盖,不改代码。
+ARK_SEED_MODEL = os.environ.get("ARK_SEED_MODEL", "doubao-seed-2-1-pro-260628")
+
+# 成片下载代理:全管线(火山/即梦/即梦CDN)均为国内直连,默认不走代理。
+# 极少数网络环境下载 CDN 需代理时,设 DAIHUO_DOWNLOAD_PROXY=http://127.0.0.1:7896。
+DOWNLOAD_PROXY = os.environ.get("DAIHUO_DOWNLOAD_PROXY", "")

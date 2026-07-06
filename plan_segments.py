@@ -22,7 +22,7 @@ import argparse, json, math, os, re
 
 TAIL = "电影质感,真实生活感。保持无字幕,不要生成BGM或背景音乐,不要生成Logo,不要生成水印。"
 MAX_DUR = 12      # 单段目标时长上限(multimodal 硬上限15,留余量)
-MAX_CUTS = 3      # 单个 multimodal 内部硬切上限(实测5崩)
+MAX_CUTS = 3      # 单段最多归并 3 个镜头(=2 个内部硬切;即梦内部硬切实测 5 崩,留足余量)
 
 
 def _distribute(sents, n):
@@ -78,9 +78,19 @@ def group_shots(shots):
     return segs
 
 
+def _host_on_camera(s):
+    """有完整真人出镜吗?新版 shotlist 有结构化布尔字段 host_on_camera(可靠);
+    旧版 shotlist 回退老口径:person 含「真人」子串(Seed 惯写「有真人,主播…」vs「仅露出手」——
+    仅露手的 hero_real 镜必须留在 i2v 真图路由,不能因为"有人"就抢进口播)。"""
+    v = s.get("host_on_camera")
+    if isinstance(v, bool):
+        return v
+    return "真人" in (s.get("person") or "")
+
+
 def seg_role(shots):
     """段的主导类型:有人说话→口播; 否则看 product_role 多数"""
-    if any((s.get("dialogue") or "").strip() and "真人" in (s.get("person") or "") for s in shots):
+    if any((s.get("dialogue") or "").strip() and _host_on_camera(s) for s in shots):
         return "kou"
     roles = [s.get("product_role", "") for s in shots]
     if any(r == "hero_real" for r in roles):
@@ -90,13 +100,29 @@ def seg_role(shots):
     return "kou" if any((s.get("dialogue") or "").strip() for s in shots) else "dynamic"
 
 
-# 产品/包装形态词 → products 键 的同义映射(反推文本里的说法可能和素材键不同)
+# 产品/包装形态词 → products 键 的同义映射(反推文本里的说法可能和素材键不同)。
+# 这是【默认表】:包装类词是通用的;hero 的默认词表偏生鲜(源自海参案例)。
+# ★换产品时在 assets.json 加 "forms": {"键": ["别名",..]} 合并/新增——键可以是 products 里任何键,
+#   如化妆品 {"hero": ["精华","滴管","膏体","质地"], "瓶身": ["玻璃瓶","泵头"]}。
 FORM_MAP = [
-    (["礼袋", "礼盒", "手提袋", "提袋"], "礼盒"),
+    (["礼袋", "礼盒", "手提袋", "提袋", "礼品盒"], "礼盒"),
     (["内包装", "包装盒", "塑料盒", "保鲜盒", "盒装", "包装袋"], "内包装"),
     (["真空", "独立", "单根", "独立包装", "小包装"], "单根"),
-    (["海参", "参刺", "剖面", "解冻", "肉质", "内筋", "底足"], "hero"),
+    (["海参", "参刺", "剖面", "解冻", "肉质", "内筋", "底足",
+      "产品特写", "裸品", "实物"], "hero"),
 ]
+
+
+def merged_form_map(cfg):
+    """默认 FORM_MAP + assets.json 的 forms 字段(别名扩充/新形态键)"""
+    fm = [(list(w), k) for w, k in FORM_MAP]
+    for key, aliases in (cfg.get("forms") or {}).items():
+        for w, k in fm:
+            if k == key:
+                w.extend(a for a in aliases if a not in w); break
+        else:
+            fm.append((list(aliases), key))
+    return fm
 
 
 def _seg_text(shots):
@@ -104,12 +130,12 @@ def _seg_text(shots):
                      s.get("subject", "")) for s in shots)
 
 
-def pick_product_anchors(shots, products):
+def pick_product_anchors(shots, products, form_map=None):
     """★返回该段提示词提到的【所有】产品形态对应的图 [(label,path)..],不是只选一张。
     同时返回 missing: 提到了但用户没提供对应图的形态(→即梦会自由发挥,需报警)。"""
     text = _seg_text(shots)
     anchors, seen, missing = [], set(), []
-    for words, key in FORM_MAP:
+    for words, key in (form_map or FORM_MAP):
         if any(w in text for w in words):
             if key in products and key not in seen:
                 anchors.append((key, products[key])); seen.add(key)
@@ -122,7 +148,7 @@ def pick_product_anchors(shots, products):
     return anchors[:4], missing   # multimodal 总图 ≤9(含主播),产品图控 4 张内
 
 
-def build_kou_prompt(shots, host, prod_desc, anchors):
+def build_kou_prompt(shots, host, prod_desc, anchors, host_desc=""):
     """anchors=[(label,path)..]。@图片1=主播,@图片2..N=各产品形态,提示词逐一声明。"""
     scene = shots[0].get("scene", "")
     acts = []
@@ -136,7 +162,10 @@ def build_kou_prompt(shots, host, prod_desc, anchors):
         f"@图片{i+2}是{prod_desc}的{label}(以此图为准,不要改产品外观和包装文字)。"
         for i, (label, _) in enumerate(anchors))
     images = [host] + [p for _, p in anchors]
-    p = (f"@图片1是女带货主播本人,全程保持@图片1长相穿着一致。{prod_lines}"
+    host_line = (f"@图片1是带货主播本人({host_desc}),每一个镜头都保持与@图片1完全一致的"
+                 f"长相、发型和这身穿着:{host_desc}。" if host_desc else
+                 "@图片1是带货主播本人,全程保持@图片1长相穿着一致。")
+    p = (f"{host_line}{prod_lines}"
          f"竖屏9:16。场景:{scene}。{body}。"
          f"台词{{{dialogue}}}@音频1,主播嘴巴跟随音频节奏自然说话,口型同步。{TAIL}")
     return p, dialogue, images
@@ -144,9 +173,11 @@ def build_kou_prompt(shots, host, prod_desc, anchors):
 
 # 说话/口播性动作词:hero 段一律剔除(哪怕从句里也提了产品)
 TALK_WORDS = ["说话", "讲解", "对着镜头", "做手势", "比划", "介绍", "号召", "促单", "讲述"]
-# 产品操作动词:完备性关卡核对这些有没有漏进提示词(治 G3 漏动作)
+# 产品操作动词:完备性关卡核对这些有没有漏进提示词(治 G3 漏动作)。
+# 默认表偏食品;★换品类在 assets.json 加 "product_verbs": ["涂","抹","喷","穿","抖开",..] 扩充。
 PRODUCT_VERBS = ["掰", "切", "撕", "捏", "夹", "按压", "按", "拉扯", "拉开", "浇",
-                 "淋", "舀", "挤", "转动", "放", "夹起", "咬"]
+                 "淋", "舀", "挤", "转动", "放", "夹起", "咬",
+                 "涂", "抹", "喷", "擦", "滴", "敷", "穿", "戴", "拧开", "打开"]
 
 
 def _clauses(action):
@@ -177,14 +208,15 @@ def build_package_prompt(shots, prod_desc, anchor_label):
             f"放在桌面上,室内柔和灯光。画面纯净,不要额外文字,不要Logo水印。")
 
 
-def completeness_check(prompt, shots):
+def completeness_check(prompt, shots, verbs=None):
     """只核对【产品操作动词】有没有漏进提示词(忽略主播说话从句),漏了返回 warns"""
+    verbs = verbs or PRODUCT_VERBS
     warns = []
     for s in shots:
         for c in _clauses(s.get("action", "")):
             if any(w in c for w in TALK_WORDS):      # 主播从句不检
                 continue
-            miss = [v for v in PRODUCT_VERBS if v in c and v not in prompt]
+            miss = [v for v in verbs if v in c and v not in prompt]
             if miss:
                 warns.append(f"#{s['shot_id']} 漏产品动作{miss}: {c[:20]}")
     return warns
@@ -194,8 +226,11 @@ def plan(shotlist_path, assets_path, out_path):
     sl = json.load(open(shotlist_path))
     cfg = json.load(open(assets_path))
     host = cfg.get("host_anchor", "")
+    host_desc = cfg.get("host_desc", "")     # 主播外形一句话(发型/上衣/气质),钉死跨段穿着一致
     prod_desc = cfg.get("product_desc", "产品")
     products = cfg.get("products", {})
+    form_map = merged_form_map(cfg)
+    verbs = PRODUCT_VERBS + [v for v in (cfg.get("product_verbs") or []) if v not in PRODUCT_VERBS]
     shots = split_long_shots(sl["shots"])       # 修1: 先拆超长单镜
     groups = group_shots(shots)
 
@@ -207,9 +242,9 @@ def plan(shotlist_path, assets_path, out_path):
         sid = f"S{gi}"
         warns = []
         if role == "kou":
-            anchors, missing = pick_product_anchors(shots, products)
-            prompt, dialogue, images = build_kou_prompt(shots, host, prod_desc, anchors)
-            warns = completeness_check(prompt, shots)
+            anchors, missing = pick_product_anchors(shots, products, form_map)
+            prompt, dialogue, images = build_kou_prompt(shots, host, prod_desc, anchors, host_desc)
+            warns = completeness_check(prompt, shots, verbs)
             warns += [f"⚠锚图缺失:提示词提到'{w}'但assets无对应图,即梦会自由发挥编产品→请补图或删该形态" for w, _ in missing]
             seg = {"seg": sid, "type": "mm", "images": images,
                    "anchor_labels": [l for l, _ in anchors],
@@ -217,16 +252,16 @@ def plan(shotlist_path, assets_path, out_path):
         elif role == "hero":
             anchor = products.get("hero_alt") or products.get("hero")
             prompt = build_hero_prompt(shots, prod_desc)
-            warns = completeness_check(prompt, shots)
+            warns = completeness_check(prompt, shots, verbs)
             seg = {"seg": sid, "type": "i2v", "anchor": anchor, "prompt": prompt}
         elif role == "package":
-            anchors, missing = pick_product_anchors(shots, products)
+            anchors, missing = pick_product_anchors(shots, products, form_map)
             label, anchor = anchors[0] if anchors else ("产品", products.get("hero"))
             prompt = build_package_prompt(shots, prod_desc, label)
             warns = [f"⚠锚图缺失:'{w}'无对应图" for w, _ in missing]
             seg = {"seg": sid, "type": "i2v", "anchor": anchor, "prompt": prompt}
         else:
-            anchors, _ = pick_product_anchors(shots, products)
+            anchors, _ = pick_product_anchors(shots, products, form_map)
             anchor = anchors[0][1] if anchors else products.get("hero")
             prompt = build_hero_prompt(shots, prod_desc)
             seg = {"seg": sid, "type": "i2v", "anchor": anchor, "prompt": prompt}

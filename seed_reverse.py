@@ -18,7 +18,7 @@ import argparse, base64, json, os, re, subprocess, sys, time
 import requests
 
 ARK_URL   = "https://ark.cn-beijing.volces.com/api/v3/responses"
-ARK_MODEL = "ep-20260630203852-ncz29"        # doubao-seed-2-1-pro
+from config import ARK_SEED_MODEL as ARK_MODEL   # 公共模型名,可用环境变量 ARK_SEED_MODEL 覆盖
 from config import ark_key
 NO_PROXY  = {"http": None, "https": None}     # 火山国内 endpoint,绝不走代理
 
@@ -41,6 +41,7 @@ SCHEMA = """{
    "scene": "环境",
    "lighting": "光线方向/冷暖/明暗",
    "person": "有无真人+谁(主播/质检员等)+穿着",
+   "host_on_camera": "布尔:有完整真人出镜说话=true;仅露手/仅背影/无人=false(决定口播还是真图路由,判准)",
    "product_in_frame": "产品如何出现(无/手持/桌面/特写/使用中/包装/成品)+占比",
    "product_role": "none(无产品) | dynamic(产品动态主体,质感不必极真) | hero_real(产品真实质感特写,如剖面/参刺/弹性,AI易翻车需真图锚定) | package_text(包装且文字需清晰,建议后期贴图)",
    "onscreen_text": "屏上所有贴字原文,无则空",

@@ -46,13 +46,19 @@ python3 <engine>/doctor.py
 3. **音色**:A模式默认复用原音;要换声则给音色参考或用默认香香
 4. 确认横竖屏/时长无异常(doctor 不管这个,ffprobe 一下)
 
-`assets.json` 格式:
+`assets.json` 格式(前3个必填,后3个按需):
 ```json
 {"host_anchor":"assets/host.jpg",
  "product_desc":"高小参鲜蒸海参,深蓝金色包装",
  "products":{"hero":"assets/单只正面.jpg","hero_alt":"assets/剖面.jpg",
-             "礼盒":"assets/礼盒.png","内包装":"assets/内包装.png","单根":"assets/单根.png"}}
+             "礼盒":"assets/礼盒.png","内包装":"assets/内包装.png","单根":"assets/单根.png"},
+ "host_desc":"齐肩黑发,白色圆领上衣,居家亲切感",
+ "forms":{"hero":["精华","滴管","膏体"],"瓶身":["玻璃瓶","泵头"]},
+ "product_verbs":["涂抹","上脸","拍打"]}
 ```
+- **host_desc**(推荐):主播外形一句话,会钉进每个口播段提示词——治"跨段穿着漂移"(实测坑)
+- **forms**:产品形态别名表——默认表偏海参/生鲜,**换品类必配**,否则锚图路由匹配不上
+- **product_verbs**:该品类的产品操作动词——完备性关卡靠它查"漏动作",默认表偏食品
 （人物锚定图 host_anchor:A模式可从原片抽帧/或 text2image 生成新身份;纯产品无人视频可省。）
 
 ## 管线(A模式)
@@ -73,8 +79,11 @@ python3 <engine>/doctor.py
         → **两条生成腿**:即梦CLI(5500/月积分池,口播口型只能它) | 火山Ark(--i2v-backend ark:i2v段走ark_gen.py,按token计费独立于积分池)。CLI积分紧张时把i2v卸给Ark省池子。
 5 装配  python3 assemble.py run/segments.json --clips run/clips --audio-dir run/audio/seg --out run/output/FULL.mp4
 6 评委  python3 judge.py run/output/FULL.mp4 [--target 原片.mp4]
-        → Seed2.1Pro 按三看漏斗90分制打分+整改建议(A模式可加--target看保真度)
-7 交付  成片是粗剪:销售贴字/精修字幕后期剪映加;段时长向上取整,精修按音频卡帧
+        → Seed2.1Pro 按三看漏斗90分制打分+整改建议;--target 时成片+原片一起上传做真保真度对比
+        → 成片>35MB 自动压 360p 小版上传(base64 上限)
+7 字幕  python3 export_subs.py run/segments.json --shotlist run/shotlist.json --out run/output/FULL
+        → FULL.srt(句级粗对齐字幕)+ FULL_贴字清单.md(原片屏上贴字的时间点+原文)——剪映照抄
+8 交付  成片是粗剪:贴字/字幕精修在剪映做(用第7步产物);口播段生成时长已按配音实际时长自动上调
 ```
 > 评委分低多半是"原片结构本就烂"(口播/多卖点/开箱)——忠实复刻分低正常;要高分走 B 模式方法论优化(单卖点+三倍画,见 qianchuan/04)。
 
@@ -94,8 +103,10 @@ python3 <engine>/doctor.py
 - **拼接**:异源 mp4 直接 concat 会 NAL 错 → 先逐段归一化(scale+pad720x1280+setsar)再 concat(assemble 已内置)。
 - **口型/音轨**:段配音 pad 到该段视频时长、对齐段起点;别用 `-map` 覆盖乱时轴。
 - **即梦**:seedance2.0_vip 必带 `--video_resolution`;含真人脸 image2video 易拦(纯产品图安全);内部硬切 ≤3(5崩);VIP并发=1串行。
-- **反推**:Seed2.1Pro 加 `thinking:disabled`+`stream`(快17倍不掉精度);火山**不走代理**;Bash默认2分超时会掐长请求→后台跑。
-- **key脱敏**:AIzaSy类key读文件会被截断→base64存(Gemini);ark key(ark-开头)不受影响,用环境变量 ARK_API_KEY(见 config.py)。
+- **反推**:Seed2.1Pro 加 `thinking:disabled`+`stream`(快17倍不掉精度);Bash默认2分超时会掐长请求→后台跑。
+- **代理**:★全管线(火山API/即梦CLI/即梦CDN下载)国内直连,**无需任何代理**——代理是 Gemini 反推时代的遗留,已随引擎更换退役。系统全局 http_proxy 已被脚本显式绕开;极个别网络下载 CDN 失败时才设 DAIHUO_DOWNLOAD_PROXY。
+- **key/模型**:ark key 用环境变量 ARK_API_KEY;反推/评委模型默认公共模型名(可用 ARK_SEED_MODEL 覆盖),不再依赖私人 endpoint ID。
+- **配音时长**:B模式改词后配音可能比原镜长——gen 已按段 wav 实际时长自动上调生成时长(上限15s,逼近上限会告警要求拆段)。
 - **后台命令**:别同时用 `nohup &` + run_in_background(外层立即返回致误报completed)。
 
 ## 可移植性
