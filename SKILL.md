@@ -1,9 +1,11 @@
 ---
 name: daihuo-fanpai
 description: 复刻/仿拍爆款带货短视频 —— 反推目标视频分镜,用即梦(Seedance)重新生成镜头,配音拼接成片。A模式(忠实复刻:原台词原产品) / B模式(跨类目迁移:换产品+千川本地化脚本)。触发:复刻带货视频、仿拍爆款、把这条视频用我的产品重做、抖音带货素材复刻、即梦复刻。
-version: 1.0
+tags: [复刻, 仿拍, 带货视频, 短视频, 即梦, seedance, 视频生成, 千川, 剪映草稿, 群戏]
+version: 2.0
 status: verified
 created: 2026-07-01
+updated: 2026-07-13
 ---
 
 # 带货短视频复刻 (daihuo-fanpai)
