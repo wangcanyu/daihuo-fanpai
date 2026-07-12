@@ -15,9 +15,10 @@ from config import ark_key, ARK_SEED_MODEL as ARK_MODEL
 MAX_UPLOAD_MB = 35   # base64 上传上限的安全线,超了自动压小版再评(实测 >40MB 会被拒)
 
 
-def _prep(video):
-    """成片过大则压 360p 小版供上传(评委看结构/画面/分镜,小版足够)。返回可上传路径。"""
-    if os.path.getsize(video) <= MAX_UPLOAD_MB * 1048576:
+def _prep(video, limit_mb=MAX_UPLOAD_MB):
+    """过大则压 360p 小版供上传(评委看结构/画面/分镜,小版足够)。返回可上传路径。
+    limit_mb:多视频对比时按视频数均分预算(合并>~50MB 会 SSLEOF 断连,榴莲片实测坑)。"""
+    if os.path.getsize(video) <= limit_mb * 1048576:
         return video
     small = os.path.join(tempfile.gettempdir(),
                          f"_judge_{os.path.basename(video)}")
@@ -38,9 +39,10 @@ def call(video_paths, prompt, timeout=400):
     if isinstance(video_paths, str):
         video_paths = [video_paths]
     key = ark_key()
+    budget = MAX_UPLOAD_MB // len(video_paths)  # 合并预算均分,防双视频超限断连
     content = []
     for vp in video_paths:
-        b64 = base64.b64encode(open(_prep(vp), "rb").read()).decode()
+        b64 = base64.b64encode(open(_prep(vp, budget), "rb").read()).decode()
         content.append({"type": "input_video", "video_url": f"data:video/mp4;base64,{b64}"})
     content.append({"type": "input_text", "text": prompt})
     body = {"model": ARK_MODEL,

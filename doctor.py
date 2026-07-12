@@ -62,6 +62,25 @@ def check_cosyvoice():
                   "①A模式复用原片音频(无需TTS) ②接云端TTS ③用户自备音频 ④手动装CosyVoice")
 
 
+def check_jianying():
+    # 剪映草稿交付(deliver --mode draft):轻依赖+本机目录,缺则降级 --mode final
+    import config
+    ok_lib = os.path.exists(config.JY_PYTHON) and sh(
+        [config.JY_PYTHON, "-c", "import pyJianYingDraft"]) and \
+        sh([config.JY_PYTHON, "-c", "import pyJianYingDraft"]).returncode == 0
+    if not ok_lib:
+        return WARN, ("pyJianYingDraft 未装 → 轻依赖,可自动装: python3 -m venv ~/.venv-jianying && "
+                      "~/.venv-jianying/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple "
+                      "pyjianyingdraft;不装则交付降级 --mode final")
+    from deliver import to_wsl
+    d = config.JY_DRAFTS_DIR
+    if not d:
+        return WARN, "库已装;草稿目录未配 → 设 DAIHUO_JY_DRAFTS=剪映草稿根目录(剪映设置里可查)"
+    if not os.path.isdir(to_wsl(d)):
+        return WARN, f"库已装;草稿目录不存在: {d}(检查 DAIHUO_JY_DRAFTS)"
+    return OK, f"pyJianYingDraft + 草稿目录就位({d})"
+
+
 def check_proxy():
     # 全管线(火山API/即梦CLI/即梦CDN下载)均国内直连,无需任何代理。
     # 系统若设了全局 http_proxy,脚本已显式绕开;极少数网络下载 CDN 需代理时设 DAIHUO_DOWNLOAD_PROXY。
@@ -71,7 +90,8 @@ def check_proxy():
 def main():
     checks = [("ffmpeg", check_ffmpeg), ("即梦CLI(生成)", check_dreamina),
               ("Seed2.1Pro key(反推)", check_ark),
-              ("CosyVoice(配音)", check_cosyvoice), ("代理", check_proxy)]
+              ("CosyVoice(配音)", check_cosyvoice),
+              ("剪映草稿交付", check_jianying), ("代理", check_proxy)]
     print("===== 复刻 skill 环境体检 =====")
     blockers = []
     for name, fn in checks:

@@ -42,3 +42,18 @@ ARK_SEED_MODEL = os.environ.get("ARK_SEED_MODEL", "doubao-seed-2-1-pro-260628")
 # 成片下载代理:全管线(火山/即梦/即梦CDN)均为国内直连,默认不走代理。
 # 极少数网络环境下载 CDN 需代理时,设 DAIHUO_DOWNLOAD_PROXY=http://127.0.0.1:7896。
 DOWNLOAD_PROXY = os.environ.get("DAIHUO_DOWNLOAD_PROXY", "")
+
+# 剪映草稿交付(deliver.py --mode draft):
+#   JY_DRAFTS_DIR = 剪映草稿根目录(剪映设置里可查/可改),Windows 或 WSL 路径皆可
+#   JY_PYTHON     = 装有 pyJianYingDraft 的解释器(轻依赖,独立venv,doctor 给安装命令)
+#   读取优先级同 ark_key:环境变量 DAIHUO_JY_DRAFTS > 文件 ~/.config/daihuo-fanpai/jy_drafts
+def _jy_drafts():
+    d = os.environ.get("DAIHUO_JY_DRAFTS", "").strip()
+    if d:
+        return d
+    p = os.path.expanduser("~/.config/daihuo-fanpai/jy_drafts")
+    return open(p).read().strip() if os.path.exists(p) else ""
+
+
+JY_DRAFTS_DIR = _jy_drafts()
+JY_PYTHON = os.path.expanduser(os.environ.get("DAIHUO_JY_PYTHON", "~/.venv-jianying/bin/python"))
