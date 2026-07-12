@@ -92,7 +92,7 @@ def synth(plan_path, out_dir, voices, instruct, pron_fix_path=None, default_spk=
                 fixed_any.append(s["seg"])
             sid = f"{s['seg']}__{j}"
             lines.append({"id": sid, "voice": spk, "instruct": instruct, "text": t2})
-            ids.append((sid, spk))
+            ids.append((sid, spk, txt))  # txt=正字原文(字幕用),t2=读音修正后(只喂TTS)
         seg_subs[s["seg"]] = ids
     if fixed_any:
         print(f"[tts] 读音修正生效于段: {sorted(set(fixed_any))}")
@@ -108,9 +108,26 @@ def synth(plan_path, out_dir, voices, instruct, pron_fix_path=None, default_spk=
     print(r.stdout[-600:])
     if r.returncode != 0:
         print("[tts][ERR]", r.stderr[-500:]); return
+    # 句级时长 → timing.json(deliver.py 生成精确字幕轴用;必须在合并前量,单句段合并会 move 掉子wav)
+    timing = {}
+    for seg, subids in seg_subs.items():
+        rows = []
+        for sid, spk, txt in subids:
+            w = os.path.join(out_dir, f"{sid}_{spk}.wav")
+            if os.path.exists(w):
+                d = float(subprocess.check_output(
+                    ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                     "-of", "csv=p=0", w]).strip())
+                rows.append({"speaker": spk, "text": txt, "dur": round(d, 3)})
+        if rows:
+            timing[seg] = rows
+    json.dump(timing, open(os.path.join(out_dir, "timing.json"), "w"),
+              ensure_ascii=False, indent=1)
+    print(f"[tts] 句级时长 → {os.path.join(out_dir, 'timing.json')}({sum(len(v) for v in timing.values())}句)")
+
     # 每段: 把它的子句 wav(<sid>_<spk>.wav)按顺序拼成 <seg>.wav
     for seg, subids in seg_subs.items():
-        subwavs = [os.path.join(out_dir, f"{sid}_{spk}.wav") for sid, spk in subids]
+        subwavs = [os.path.join(out_dir, f"{sid}_{spk}.wav") for sid, spk, _ in subids]
         subwavs = [w for w in subwavs if os.path.exists(w)]
         dst = os.path.join(out_dir, f"{seg}.wav")
         if len(subwavs) == 1:

@@ -13,19 +13,27 @@
 2. **完备性关卡** `completeness_check`:生成前核对产品动作动词有没有漏进提示词。
 3. 人审 `segments.md` 闸口:烧积分前人再看一眼(挡"垃圾进垃圾出")。
 
-## 1. 架构:5 块可插拔引擎 + 数据流
+## 1. 架构:6 块可插拔引擎 + 数据流
 
 ```
 目标视频 ─seed_reverse→ shotlist.json ─plan_segments→ segments.json(+segments.md人审)
    │                                          │
    │                        [B模式:脚本skill改 segments[].dialogue]
    │                                          ↓
-   └─assets.json(产品图)──────────→ tts_segments → audio/seg/<seg>.wav
+   └─assets.json(产品图)──────────→ tts_segments → audio/seg/<seg>.wav (+timing.json 句级时长)
                                               ↓                    ↓
                                        gen_segments → clips/<seg>.mp4
                                               ↓
-                                        assemble → output/FULL.mp4
+                                        assemble → output/FULL.mp4(judge输入,保持中性:无字幕无BGM)
+                                              ↓
+                                        deliver ─┬→ 剪映草稿(视频/配音/字幕/贴字参考/空BGM 五轨,自包含)
+                                                 └→ FULL_成品.mp4(烧字幕+可选BGM)
 ```
+
+**交付层设计原则**:FULL.mp4 是中间主档(judge 的输入、回归基准),永远保持"无字幕无BGM"的中性状态;
+一切观感加工(字幕烧入/BGM/剪映草稿)都在 deliver 下游做,可以反复重跑而不动上游。
+字幕时间轴的精度来源:tts_segments 逐句合成时顺手量出的 timing.json(真实时长),
+而非字数占比估算——这是"接近成品"敢烧字幕的前提。剪映 10.7 实测读明文草稿正常(加密只在它保存时)。
 
 每块=一个独立 .py,**只通过下面的 JSON 文件/文件夹交接**。换某块实现,只要产物 schema 不变,别处一行不用改。
 

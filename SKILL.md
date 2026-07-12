@@ -11,7 +11,7 @@ created: 2026-07-01
 反推爆款 → 迁移到目标产品 → 即梦生成 → 配音拼接。核心洞察:**病在"反推→写提示词"的转换环节会丢细节/丢动作,不在模型**。本 skill 把验证过的管线固化,每步产物可审。
 
 引擎在本目录(可插拔,换实现只改单个文件):
-`seed_reverse.py` 反推 · `plan_segments.py` 规划 · `gen_segments.py` 生成 · `tts_segments.py` 配音 · `assemble.py` 装配 · `doctor.py` 体检。
+`seed_reverse.py` 反推 · `plan_segments.py` 规划 · `gen_segments.py` 生成 · `tts_segments.py` 配音 · `assemble.py` 装配 · `deliver.py` 交付(剪映草稿/成品) · `doctor.py` 体检。
 
 > **要改造/换引擎/接手本 skill?先读 `DESIGN.md`**(设计理由 + 数据契约 + 扩展点)。参考样例在 `references/`。
 
@@ -83,7 +83,11 @@ python3 <engine>/doctor.py
         → 成片>35MB 自动压 360p 小版上传(base64 上限)
 7 字幕  python3 export_subs.py run/segments.json --shotlist run/shotlist.json --out run/output/FULL
         → FULL.srt(句级粗对齐字幕)+ FULL_贴字清单.md(原片屏上贴字的时间点+原文)——剪映照抄
-8 交付  成片是粗剪:贴字/字幕精修在剪映做(用第7步产物);口播段生成时长已按配音实际时长自动上调
+8 交付  python3 deliver.py run/segments.json --mode draft|final|both --clips run/clips --audio-dir run/audio/seg --shotlist run/shotlist.json
+        → draft:★剪映草稿(推荐)——视频轨逐段(段边界即切割点)+配音轨+字幕轨逐句+贴字参考轨+空BGM轨,
+          素材copy进草稿目录自包含;打开剪映草稿箱直接精剪,不用再切拼好的片子
+        → final:在 FULL.mp4 上烧字幕+可选 --bgm 混音,出"能直接投的及格版"(FULL.mp4 本身不动,它是judge输入)
+        → 字幕轴优先吃 audio/seg/timing.json(tts产出,逐句真实时长);缺则按字数占比粗对齐
 ```
 > 评委分低多半是"原片结构本就烂"(口播/多卖点/开箱)——忠实复刻分低正常;要高分走 B 模式方法论优化(单卖点+三倍画,见 qianchuan/04)。
 
@@ -108,6 +112,10 @@ python3 <engine>/doctor.py
 - **key/模型**:ark key 用环境变量 ARK_API_KEY;反推/评委模型默认公共模型名(可用 ARK_SEED_MODEL 覆盖),不再依赖私人 endpoint ID。
 - **配音时长**:B模式改词后配音可能比原镜长——gen 已按段 wav 实际时长自动上调生成时长(上限15s,逼近上限会告警要求拆段)。
 - **后台命令**:别同时用 `nohup &` + run_in_background(外层立即返回致误报completed)。
+- **Ark人脸政策(★两条腿分工修正)**:火山对**含人脸参考图**的视频生成政策级拦截(`InputImageSensitiveContentDetected.PrivacyInformation`,AI写实人像也拦,官方唯一解=换虚拟人像)→ **口播/人物段=即梦CLI专属,纯产品i2v段才双腿可走**。ark_gen 已有 submit_mm(多图role=reference_image+音频role=reference_audio,格式已验对),对纯产品+配音场景或许可用(未验)。
+- **群戏(三角色情景剧,榴莲片验证)**:单主播模板不适配群戏 → 逐段按 shotlist subject 判断出镜角色挂多张人物锚定图+逐角色人设声明(参考 runs/榴莲复刻/patch_cast.py);**必加人数硬约束**"画面中自始至终只有X、Y这N个角色,不要出现任何其他人物"(不加会幻觉多生成人物,实测);产品未登场的段必须剥离产品图防剧透;多人轮流说话的口型分配即梦能做对(Seed质检实证)。原音复用时字幕轴用 shotlist 镜级时间构造 timing.json(镜头时间=音频时间,精确)。
+- **judge双视频**:对比模式合并 >~50MB 会 SSLEOF 断连 → 已改按视频数均分上传预算自动压小。
+- **剪映草稿**:剪映 6+ 保存草稿会加密,但**读明文草稿正常**(10.7 实测:识别/打开/编辑/回存全通)。此结论随剪映升级可能失效,失效降级 `--mode final`。草稿引用的是 Windows 绝对路径 → deliver 已把素材 copy 进草稿目录自包含+改写 /mnt/x/→X:/;草稿根目录用 DAIHUO_JY_DRAFTS 或 ~/.config/daihuo-fanpai/jy_drafts 配置。
 
 ## 可移植性
 

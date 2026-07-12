@@ -36,6 +36,36 @@ def submit_i2v(image_path, prompt, duration=5, resolution="720p", ratio="9:16"):
     return r.json()["id"]
 
 
+def _img_item(path):
+    img = base64.b64encode(open(path, "rb").read()).decode()
+    mime = "image/png" if path.lower().endswith(".png") else \
+           "image/webp" if path.lower().endswith(".webp") else "image/jpeg"
+    return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{img}"}}
+
+
+def submit_mm(image_paths, audio_path, prompt, duration=5, resolution="720p", ratio="9:16"):
+    """多模态参考(Seedance 2.0):多张锚图 + 段配音音频驱动口型 + 文本。
+    prompt 里用 @图片1..N/@音频1 指代素材(与即梦 multimodal2video 同约定)。
+    多图必须带 role(API 400 明示);参考图用 reference_image。
+    2026-07-12 榴莲群戏首验;若 API 报不支持 audio,调用方应回退即梦CLI。"""
+    content = []
+    for p in image_paths:
+        it = _img_item(p)
+        it["role"] = "reference_image"
+        content.append(it)
+    if audio_path:
+        au = base64.b64encode(open(audio_path, "rb").read()).decode()
+        amime = "audio/wav" if audio_path.lower().endswith(".wav") else "audio/mpeg"
+        content.append({"type": "audio_url", "role": "reference_audio",
+                        "audio_url": {"url": f"data:{amime};base64,{au}"}})
+    text = f"{prompt} --resolution {resolution} --duration {duration} --ratio {ratio}"
+    content.append({"type": "text", "text": text})
+    body = {"model": MODEL, "content": content}
+    r = requests.post(BASE, headers=_headers(), json=body, proxies=NO_PROXY, timeout=120)
+    r.raise_for_status()
+    return r.json()["id"]
+
+
 def submit_t2v(prompt, duration=5, resolution="720p", ratio="9:16"):
     text = f"{prompt} --resolution {resolution} --duration {duration} --ratio {ratio}"
     body = {"model": MODEL, "content": [{"type": "text", "text": text}]}
