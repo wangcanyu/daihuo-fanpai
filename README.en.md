@@ -76,6 +76,13 @@ Beyond single-host videos, a 3-character office comedy has been replicated end-t
 - **Backend boundary (policy)**: Volcano rejects any reference image containing a human face (even AI-generated photoreal ones) — host/person segments are Jimeng-CLI-only; product-only segments can use either backend.
 - **Compliance is on you**: no medical claims, no fabricated endorsements, real prices only.
 
+## About the author
+
+Hands-on e-commerce short-video operator in fresh/food categories (sea cucumber, fruit — all battle-tested), running my own paid-traffic campaigns, edits, and ROI reviews. I work with agents like Claude Code daily and turn every hard-won lesson into a reusable skill — this repo grew exactly that way: not designed up front, but forced out one real order at a time.
+
+- **WeChat**: `hornonthebus` (for replication / AI video production topics — say why you're adding)
+- [Issues](https://github.com/wangcanyu/daihuo-fanpai/issues) and PRs welcome
+
 ## License
 
 MIT · Copyright (c) 2026 wangcanyu
