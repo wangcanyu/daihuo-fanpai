@@ -117,6 +117,7 @@ python3 <engine>/doctor.py
 - **key/模型**:ark key 用环境变量 ARK_API_KEY;反推/评委模型默认公共模型名(可用 ARK_SEED_MODEL 覆盖),不再依赖私人 endpoint ID。
 - **配音时长**:B模式改词后配音可能比原镜长——gen 已按段 wav 实际时长自动上调生成时长(上限15s,逼近上限会告警要求拆段)。
 - **后台命令**:别同时用 `nohup &` + run_in_background(外层立即返回致误报completed)。
+- **换声(Seed-VC)质量两要素**:①参考音频信噪比≥30dB(脏参考的底噪会被当音色学进产物,vc_segments已内置参考体检);②嫌有金属感/电流感伪影→`--steps 50~100`(默认30,换时间买干净)。
 - **Ark人脸政策(★两条腿分工修正)**:火山对**含人脸参考图**的视频生成政策级拦截(`InputImageSensitiveContentDetected.PrivacyInformation`,AI写实人像也拦,官方唯一解=换虚拟人像)→ **口播/人物段=即梦CLI专属,纯产品i2v段才双腿可走**。ark_gen 已有 submit_mm(多图role=reference_image+音频role=reference_audio,格式已验对),对纯产品+配音场景或许可用(未验)。
 - **群戏(三角色情景剧,榴莲片验证)**:单主播模板不适配群戏 → 逐段按 shotlist subject 判断出镜角色挂多张人物锚定图+逐角色人设声明(参考 runs/榴莲复刻/patch_cast.py);**必加人数硬约束**"画面中自始至终只有X、Y这N个角色,不要出现任何其他人物"(不加会幻觉多生成人物,实测);产品未登场的段必须剥离产品图防剧透;多人轮流说话的口型分配即梦能做对(Seed质检实证)。原音复用时字幕轴用 shotlist 镜级时间构造 timing.json(镜头时间=音频时间,精确)。
 - **judge双视频**:对比模式合并 >~50MB 会 SSLEOF 断连 → 已改按视频数均分上传预算自动压小。
