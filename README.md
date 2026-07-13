@@ -33,7 +33,7 @@
 
 每一步只通过 JSON 文件/文件夹交接,**可插拔**——换反推 VLM、换视频模型、换 TTS,只改对应一个脚本(契约见 `DESIGN.md`)。
 
-## 引擎脚本(14)
+## 引擎脚本(15)
 
 | 脚本 | 作用 |
 |---|---|
@@ -49,6 +49,7 @@
 | `assemble.py` | 逐段归一化拼接 + 铺连续配音轨 |
 | `judge.py` | 评委:三看漏斗 90 分打分;`--target` 时**成片+原片一起上传做真保真度对比** |
 | `export_subs.py` | 导出句级 SRT 字幕 + 原片屏上贴字清单(剪映照抄) |
+| `vc_segments.py` | **换声不换演**(Seed-VC):原片切段音频转目标音色,表演节奏逐帧保留;治"复用原音怕查重/TTS重配丢表演"两难(单主播片;群戏需说话人分离未实现) |
 | `deliver.py` | **交付**:剪映草稿(视频/配音/字幕/贴字参考/空BGM 五轨,素材自包含,打开草稿箱即剪)或烧字幕+BGM 成品;字幕轴优先吃 TTS 句级真实时长 |
 | `config.py` | 密钥/模型/路径集中配置(全部环境变量可覆盖,无硬编码) |
 
@@ -75,6 +76,7 @@ python3 deliver.py run/segments.json --mode both --clips run/clips --audio-dir r
 | 即梦 Dreamina CLI | 视频生成(口播口型只能它;需 maestro VIP) | `curl -fsSL https://jimeng.jianying.com/cli \| bash` 后 `dreamina login` |
 | 火山方舟 Ark | 反推/评委(Seed 2.1 Pro)+ 可选生成(Seedance 2.0) | `export ARK_API_KEY=...`;模型默认公共名,`ARK_SEED_MODEL` 可换 |
 | CosyVoice(可选) | 本机配音,缺则走降级(复用原音/云TTS/自备) | `export COSYVOICE_HOME=...`,默认 `~/CosyVoice` |
+| Seed-VC(可选) | 换声不换演(第三档配音) | 独立仓库+venv装 `~/seed-vc`,`DAIHUO_SEEDVC_HOME` 可改;模型首跑自动下载(hf-mirror直连) |
 | pyJianYingDraft(可选) | 剪映草稿交付,缺则降级 `--mode final` | 独立venv装;草稿目录设 `DAIHUO_JY_DRAFTS` 或 `~/.config/daihuo-fanpai/jy_drafts` |
 | ffmpeg + Python `requests` | 切分/拼接/HTTP | — |
 

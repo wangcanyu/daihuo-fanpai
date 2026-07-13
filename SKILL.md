@@ -76,6 +76,9 @@ python3 <engine>/doctor.py
         → ★人审 run/segments.md:看分镜卡片 + 完备性关卡的"漏动作"警告,微调提示词/锚图/台词
 3 配音  python3 tts_segments.py run/segments.json --out-dir run/audio/seg
         (降级:复用原音时跳过此步,改从原视频按段切音频)
+        (第三档·换声不换演:python3 vc_segments.py run/audio/seg --target 音色.wav —— Seed-VC把
+         原片切段音频转成目标音色,表演节奏/语气逐帧保留,治"复用原音怕查重/重配丢表演"两难;
+         ⚠️整段单音色,群戏需先说话人分离,未实现)
 4 生成  python3 gen_segments.py run/segments.json --clips run/clips --audio-dir run/audio/seg [--i2v-backend ark]
         → 串行(VIP并发=1),口播段双图对口型,hero/包装段动你真图。断点续跑,--dry-run先看
         → **两条生成腿**:即梦CLI(5500/月积分池,口播口型只能它) | 火山Ark(--i2v-backend ark:i2v段走ark_gen.py,按token计费独立于积分池)。CLI积分紧张时把i2v卸给Ark省池子。
