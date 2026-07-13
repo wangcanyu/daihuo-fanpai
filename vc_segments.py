@@ -38,6 +38,20 @@ def convert(audio_dir, target, out_dir, steps=30, f0=False, only=None):
         sys.exit(f"[vc] {msg}")
     if not os.path.exists(target):
         sys.exit(f"[vc] 音色参考不存在: {target}")
+    # 参考体检:VC会把参考的环境底噪学进产物(实测:15dB脏参考→产物掉到24dB),先量信噪比
+    try:
+        r = subprocess.run([SEEDVC_PY, "-c", (
+            "import librosa,numpy as np,sys;"
+            "y,sr=librosa.load(sys.argv[1],sr=16000);"
+            "rms=librosa.feature.rms(y=y,frame_length=512,hop_length=256)[0];"
+            "f=np.percentile(rms,10);s=np.percentile(rms,90);"
+            "print(round(20*np.log10(s/max(f,1e-6))))"), target],
+            capture_output=True, text=True, timeout=120)
+        snr = int(r.stdout.strip())
+        note = "干净" if snr >= 30 else ("偏脏,底噪会转进产物,建议换更干净的参考" if snr >= 25 else "很脏,强烈建议换参考")
+        print(f"[vc] 参考信噪比≈{snr}dB({note})")
+    except Exception:
+        pass  # 体检失败不拦路
     os.makedirs(out_dir, exist_ok=True)
     env = dict(os.environ, HF_ENDPOINT="https://hf-mirror.com")  # 模型自动下载走国内镜像
     for p in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
