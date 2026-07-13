@@ -20,6 +20,25 @@ import argparse, glob, os, shutil, subprocess, sys
 
 SEEDVC_HOME = os.path.expanduser(os.environ.get("DAIHUO_SEEDVC_HOME", "~/seed-vc"))
 SEEDVC_PY = os.path.join(SEEDVC_HOME, ".venv", "bin", "python")
+# 内置干净音色(全库信噪比体检后精选;真人声纹不进git,只本机分发):
+# 内置女声1_古丽(93dB) / 内置女声2_萍萍(76dB) / 内置男声1_广智(49dB)
+BUILTIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "voices")
+DEFAULT_BUILTIN = "内置女声1_古丽"
+
+
+def resolve_target(target):
+    """--target 三种给法:wav路径 / 内置音色名(如'内置男声1_广智'或'男声') / 空=默认内置女声。
+    素材收集阶段应优先向用户要干净参考(≥30dB);不给才落到内置。"""
+    if not target:
+        target = DEFAULT_BUILTIN
+    if os.path.exists(target):
+        return target
+    cands = sorted(glob.glob(os.path.join(BUILTIN_DIR, "*.wav")))
+    hits = [c for c in cands if target in os.path.basename(c)]
+    if hits:
+        return hits[0]
+    names = [os.path.splitext(os.path.basename(c))[0] for c in cands]
+    sys.exit(f"[vc] 找不到音色参考 {target};内置可选: {names}")
 
 
 def seedvc_status():
@@ -36,8 +55,7 @@ def convert(audio_dir, target, out_dir, steps=30, f0=False, only=None):
     ok, msg = seedvc_status()
     if not ok:
         sys.exit(f"[vc] {msg}")
-    if not os.path.exists(target):
-        sys.exit(f"[vc] 音色参考不存在: {target}")
+    target = resolve_target(target)
     # 参考体检:VC会把参考的环境底噪学进产物(实测:15dB脏参考→产物掉到24dB),先量信噪比
     try:
         r = subprocess.run([SEEDVC_PY, "-c", (
@@ -93,7 +111,8 @@ def convert(audio_dir, target, out_dir, steps=30, f0=False, only=None):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("audio_dir", help="原切段音频目录(audio/seg)")
-    ap.add_argument("--target", required=True, help="目标音色参考 wav(几秒即可)")
+    ap.add_argument("--target", default=None,
+                    help="目标音色:wav路径/内置名(男声、古丽、萍萍…);省略=内置女声1_古丽。建议用户自备干净参考(≥30dB)")
     ap.add_argument("--out-dir", default=None, help="默认 <audio_dir>_vc")
     ap.add_argument("--steps", type=int, default=30, help="扩散步数,高=好但慢")
     ap.add_argument("--f0", action="store_true", help="带音高条件(歌声/音高敏感场景)")

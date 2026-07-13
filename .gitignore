@@ -28,3 +28,7 @@ _tts_manifest.json
 # 系统
 .DS_Store
 Thumbs.db
+
+# 内置音色(真人主播声纹,不公开)与agent交接文档
+voices/
+HANDOFF.md
