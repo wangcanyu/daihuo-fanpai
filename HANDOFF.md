@@ -24,6 +24,7 @@
 | 即梦 CLI + 登录 | **新机重装+重登**(凭证不跟着走):`curl -fsSL https://jimeng.jianying.com/cli \| bash` 然后 `dreamina login` |
 | Seed2.1Pro key | **新机重放** 设环境变量 `ARK_API_KEY`(ark- 开头) |
 | CosyVoice(配音) | 重型,新机大概率没有 → **走降级**(A模式复用原音最省,或云端TTS,或自备配音);别让 agent 闷头装 |
+| Seed-VC(换声,可选) | 重型GPU依赖:`~/seed-vc`+独立venv,模型首跑hf-mirror自动下载(须直连,代理会搅断);缺则换声档不可用,其它配音方案不受影响。**大文件下载走VPS中转最稳**(GitHub代理路线会静默截断,实测坑) |
 | pyJianYingDraft(剪映草稿) | 轻,新机可自动装:`python3 -m venv ~/.venv-jianying && ~/.venv-jianying/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pyjianyingdraft`;草稿目录写 `~/.config/daihuo-fanpai/jy_drafts`(剪映设置里可查);没有剪映的机器降级 `deliver --mode final` |
 
 ## C. 交接时对接手 agent 说什么(直接发这段)

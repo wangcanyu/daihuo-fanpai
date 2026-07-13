@@ -62,6 +62,13 @@ def check_cosyvoice():
                   "①A模式复用原片音频(无需TTS) ②接云端TTS ③用户自备音频 ④手动装CosyVoice")
 
 
+def check_seedvc():
+    # 换声不换演(vc_segments,可选):缺则此档不可用,不影响其它配音方案
+    from vc_segments import seedvc_status
+    ok, msg = seedvc_status()
+    return (OK, msg) if ok else (WARN, msg)
+
+
 def check_jianying():
     # 剪映草稿交付(deliver --mode draft):轻依赖+本机目录,缺则降级 --mode final
     import config
@@ -91,6 +98,7 @@ def main():
     checks = [("ffmpeg", check_ffmpeg), ("即梦CLI(生成)", check_dreamina),
               ("Seed2.1Pro key(反推)", check_ark),
               ("CosyVoice(配音)", check_cosyvoice),
+              ("Seed-VC(换声,可选)", check_seedvc),
               ("剪映草稿交付", check_jianying), ("代理", check_proxy)]
     print("===== 复刻 skill 环境体检 =====")
     blockers = []
