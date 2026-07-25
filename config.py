@@ -33,6 +33,55 @@ def ark_key_status():
         return (False, str(e))
 
 
+def xyq_key():
+    """小云雀(pippit-tool-cli)access key。读取优先级同 ark_key。"""
+    k = os.environ.get("XYQ_ACCESS_KEY")
+    if k and k.strip():
+        return k.strip()
+    p = os.path.expanduser("~/.config/daihuo-fanpai/xyq_key")
+    if os.path.exists(p):
+        return open(p).read().strip()
+    raise RuntimeError(
+        "未找到小云雀 key。请 `export XYQ_ACCESS_KEY=...` 或写入 ~/.config/daihuo-fanpai/xyq_key")
+
+
+def kimi_key():
+    """Kimi(Moonshot)API key,K3 双反推腿用。读取优先级同 ark_key。"""
+    k = os.environ.get("KIMI_API_KEY") or os.environ.get("MOONSHOT_API_KEY")
+    if k and k.strip():
+        return k.strip()
+    p = os.path.expanduser("~/.config/daihuo-fanpai/kimi_key")
+    if os.path.exists(p):
+        return open(p).read().strip()
+    raise RuntimeError(
+        "未找到 Kimi key。请 `export KIMI_API_KEY=...` 或写入 ~/.config/daihuo-fanpai/kimi_key")
+
+
+def kimi_key_status():
+    """给 doctor 用:返回 (ok, 说明),不抛异常。"""
+    try:
+        k = kimi_key()
+        src = "环境变量" if (os.environ.get("KIMI_API_KEY") or os.environ.get("MOONSHOT_API_KEY")) else "配置文件"
+        return (len(k) > 30, f"就位({src},{len(k)}字节)")
+    except Exception as e:
+        return (False, str(e))
+
+
+# K3 反推模型与端点(国内直连不走代理)
+KIMI_BASE_URL = os.environ.get("KIMI_BASE_URL", "https://api.moonshot.cn/v1")
+KIMI_K3_MODEL = os.environ.get("KIMI_K3_MODEL", "kimi-k3")
+
+
+def xyq_key_status():
+    """给 doctor 用:返回 (ok, 说明),不抛异常。"""
+    try:
+        k = xyq_key()
+        src = "环境变量 XYQ_ACCESS_KEY" if os.environ.get("XYQ_ACCESS_KEY") else "配置文件"
+        return (len(k) > 20, f"就位({src},{len(k)}字节)")
+    except Exception as e:
+        return (False, str(e))
+
+
 COSYVOICE_HOME = os.environ.get("COSYVOICE_HOME", os.path.expanduser("~/CosyVoice"))
 
 # 反推/评委用的 Seed 模型:公共模型名直调(实测可用),不再依赖私人 endpoint ID(ep-xxx)。

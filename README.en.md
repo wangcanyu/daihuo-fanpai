@@ -16,20 +16,23 @@ An **agent-driven** pipeline (built for [Claude Code](https://claude.com/claude-
 | **Product migration** | Same structure, your product/packaging | text-faithful packaging |
 | **B — Cross-category** | Borrow a viral structure from another category + methodology-driven script rewrite | 69/90 |
 | **A — Multi-character skit** | 3-character office-comedy replica (multi-anchor cast + original-audio lip sync) | fidelity 63/100 |
+| **A — Batch production** | Whole-catalog replication of one product, fully automated SOP | 16 deliveries in one day, 40-60 min each at cruise |
 
 Higher = more likely to scale in paid traffic. Understanding-driven reconstruction beats mechanical copying. Story-driven originals score low on the ads rubric by nature — judge them by fidelity instead.
 
 ## Pipeline
 
 ```
-0 doctor → 1 seed_reverse → 1.5 needed_assets (which product photos to prepare)
-→ 2 plan_segments (completeness gate + human review of segments.md)
+0 doctor → 1 seed_reverse → [1b dual reverse: k3_reverse + merge_reverse evidence adjudication]
+→ 1.5 needed_assets (which product photos to prepare)
+→ 2 plan_segments (completeness gate + human review) → [skits: patch_cast anchors + hard cast-count constraint]
 → [Mode B: localize_seed / localize_apply + review]
-→ 3 tts_segments (multi-speaker + pronunciation fixes)
-→ 4 gen_segments (Jimeng + Volcano Ark dual backend; host-shot duration auto-fits dub length)
-→ 5 assemble → 6 judge (uploads final AND source video for a real fidelity comparison)
-→ 7 export_subs (SRT + on-screen-text checklist for your editor)
-→ 8 deliver (★JianYing draft — five tracks pre-laid, open and edit | or burned-subtitle final cut)
+→ 3 tts_segments (multi-speaker + pronunciation fixes | audio reuse: cut_audio with 2-second upload gate)
+→ 4 gen_segments (Jimeng / Volcano / Xiaoyunque backends; auto retry on moderation & network flaps;
+                  post-download decode check catches corrupted streams)
+→ 5 assemble → [skits: qc_lipsync frame-level lip QC → redraw dirty segments]
+→ 6 judge (uploads final AND source video for a real fidelity comparison)
+→ 7 export_subs (SRT + on-screen-text checklist) → 8 deliver (★JianYing draft | burned-subtitle final)
 ```
 
 Stages hand off only through JSON files/folders — **pluggable**: swap the VLM, the video model, or the TTS by rewriting one script (contracts in `DESIGN.md`).
@@ -68,7 +71,7 @@ Mode B script rewriting expects a `qianchuan/` methodology pack (topic selection
 
 ## Multi-character skits
 
-Beyond single-host videos, a 3-character office comedy has been replicated end-to-end: per-segment cast anchors + per-character persona clauses + a **hard character-count constraint** (without it the model hallucinates extra people); product images are stripped from pre-reveal segments to protect the suspense; Jimeng assigns lip-sync to the correct speaker in multi-person dialogue (~90%, leftovers are one-click fixes in the draft). When reusing the original audio, the subtitle timeline is built from shot-level timestamps — exact by construction.
+Beyond single-host videos, a 3-character office comedy has been replicated end-to-end: per-segment cast anchors + per-character persona clauses + a **hard character-count constraint** (without it the model hallucinates extra people — now baked into `patch_cast.py`); product images are stripped from pre-reveal segments to protect the suspense. Speaker/lip mis-assignment now has a full treatment (error rate 28% → 6% in practice): frame-level lip QC (`qc_lipsync.py`, source-video frames as ground truth) locates dirty segments → redraw loop (1-2 draws each, keep the better take) absorbs random errors → sticky errors (same line wrong twice) get timestamped for a manual fix in the draft. Hard lesson: **never** let a video model transcribe your AI footage as QC — it hallucinates entire lines. Dual-reverse note: the two reverse models fail in mirror image (Seed: timing/burned-in-text bleed; K3: entity hallucination — it has read a soap as a steamed bun), so trust K3 for camera timelines, trust Seed + **source-frame verification** for entities, and adjudicate field by field with `merge_reverse.py`.
 
 ## Notes
 
@@ -78,10 +81,14 @@ Beyond single-host videos, a 3-character office comedy has been replicated end-t
 
 ## About the author
 
-Hands-on e-commerce short-video operator in fresh/food categories (sea cucumber, fruit — all battle-tested), running my own paid-traffic campaigns, edits, and ROI reviews. I work with agents like Claude Code daily and turn every hard-won lesson into a reusable skill — this repo grew exactly that way: not designed up front, but forced out one real order at a time.
+Wang Zili — in e-commerce since 2012, from the Taobao era through the Douyin era; running Douyin live-commerce full-time since 2019 (7 years and counting). Categories operated: **fresh food, jewelry & jade, bakery** — a messy mix, and exactly why the underlying logic became clear: whatever you sell, the algorithm always hands traffic to whoever converts it best.
 
-- **WeChat**: `hornonthebus` (for replication / AI video production topics — say why you're adding)
-- [Issues](https://github.com/wangcanyu/daihuo-fanpai/issues) and PRs welcome
+- **Best single-session GMV** ¥3.06M · **largest single-session ad spend** ¥660K · full-service operating (data, campaigns, decisions)
+- Runs his own paid-traffic campaigns, edits, and ROI reviews — sea cucumber, fruit, and soap were all tested with real money
+- Works with agents like Claude Code daily and turns every hard-won lesson into a reusable skill; this repo grew exactly that way — not designed up front, but forced out one real order at a time
+- More battle notes (paid traffic / live commerce ops, no courses sold): [5t9t.com](https://5t9t.com)
+
+**WeChat** `hornonthebus` (for replication / AI video production topics — say why you're adding); [Issues](https://github.com/wangcanyu/daihuo-fanpai/issues) and PRs welcome
 
 ## License
 
