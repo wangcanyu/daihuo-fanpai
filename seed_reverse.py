@@ -9,7 +9,7 @@ seed_reverse.py — 带货短视频反推引擎 (Doubao Seed 2.1 Pro 原生视�
 
 用法:
     python3 seed_reverse.py <video.mp4> [--out shotlist.json] [--cuts 1.2,6.0]
-                            [--scene-thresh 0.3] [--scale 480] [--keep-audio]
+                            [--scene-thresh 0.15] [--scale 480] [--keep-audio]
 最优配置(实测): 原生视频 + thinking:disabled + stream + 不走代理。8s clip≈9秒。
 
 依赖: ffmpeg/ffprobe; key 用环境变量 ARK_API_KEY(见 config.py); 国内 endpoint 不走代理。
@@ -102,7 +102,10 @@ def ark_reverse(clip_path, cuts, duration, timeout=600):
         f"2.前3秒内的镜头 is_opening_3s=true,描述要特别精细(爆点)。"
         f"3.action 要把主体+动作都写全(如'一只手把海参掰开'而非'海参剖面')。"
         f"4.product_role 判断要准(剖面/参刺/弹性这类真实质感判 hero_real,包装盒判 package_text)。"
-        f"5.材质/颜色写死。只描述不评判。")
+        f"5.材质/颜色写死。只描述不评判。"
+        f"6.台词只收录真实人声:只出现在字幕/花字上而无对应人声的文字(短视频开头常有静音字幕残留),"
+        f"只进 onscreen_text,严禁写进 dialogue 和 full_transcript。"
+        f"7.onscreen_text 逐句原样采集屏上每条字幕/花字(保留自动字幕的错字),句间用;分隔。")
     body = {
         "model": ARK_MODEL,
         "input": [{"role": "user", "content": [
@@ -144,7 +147,7 @@ def extract_json(txt):
     return json.loads(s[a:b + 1])
 
 
-def reverse(video, out=None, cuts=None, scene_thresh=0.3, scale=480,
+def reverse(video, out=None, cuts=None, scene_thresh=0.15, scale=480,
             keep_audio=True, timeout=600):
     vi = video_info(video)
     if cuts is None:
@@ -170,7 +173,8 @@ if __name__ == "__main__":
     ap.add_argument("video")
     ap.add_argument("--out", default=None)
     ap.add_argument("--cuts", default=None, help="逗号分隔时间点,省略则 ffmpeg 自动检")
-    ap.add_argument("--scene-thresh", type=float, default=0.3)
+    ap.add_argument("--scene-thresh", type=float, default=0.15,
+                    help="0.15能抓到同机位跳剪(07-19实测0.3漏检),误检可回调0.3")
     ap.add_argument("--scale", type=int, default=480)
     ap.add_argument("--no-audio", action="store_true")
     ap.add_argument("--timeout", type=int, default=600)

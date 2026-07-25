@@ -49,6 +49,48 @@ def check_ark():
     return (OK, "反推key " + msg) if ok else (BAD, "反推key缺失 → 设环境变量 ARK_API_KEY(见 config.py)")
 
 
+def check_kimi():
+    # Kimi K3:双反推第二腿,可选 → 缺失只 WARN 不挡开工
+    import config
+    ok, msg = config.kimi_key_status()
+    if not ok:
+        return WARN, f"key 未配(双反推可选腿) → {msg}"
+    # 认证探针:GET /models,不烧token
+    try:
+        import requests
+        r = requests.get(f"{config.KIMI_BASE_URL}/models",
+                         headers={"Authorization": f"Bearer {config.kimi_key()}"},
+                         proxies={"http": None, "https": None}, timeout=15)
+        if r.status_code == 401:
+            return WARN, "key 无效(401) → 到 platform.kimi.com 重新生成"
+        if r.status_code != 200:
+            return WARN, f"探针 HTTP {r.status_code}(可稍后重试)"
+    except Exception:
+        return WARN, f"key {msg},但探针网络失败(可稍后重试)"
+    return OK, f"key {msg},认证探针通过"
+
+
+def check_xyq():
+    # 小云雀(pippit-tool-cli):即梦之外的备选生成腿,可选 → 缺失只 WARN 不挡开工
+    import config
+    if not shutil.which("pippit-tool-cli"):
+        return WARN, "CLI 未装(可选备腿) → npx @pippit-dev/cli@latest install"
+    ok, msg = config.xyq_key_status()
+    if not ok:
+        return WARN, f"key 未配(可选备腿) → {msg}"
+    # 认证探针:get-thread 查不存在的会话,ret=2=key无效,其它=认证通过(不烧credits)
+    env = dict(os.environ); env["XYQ_ACCESS_KEY"] = config.xyq_key()
+    try:
+        r = subprocess.run(["pippit-tool-cli", "get-thread", "--thread-id", "doctor-probe"],
+                           capture_output=True, text=True, timeout=20, env=env)
+        out = (r.stdout or "") + (r.stderr or "")
+        if "未查询到有效" in out or "ret=2" in out:
+            return WARN, "key 无效(ret=2) → 到小云雀重新生成 access key"
+    except Exception:
+        return WARN, f"CLI + key {msg},但探针网络失败(可稍后重试)"
+    return OK, f"CLI + key {msg},认证探针通过"
+
+
 def check_cosyvoice():
     from config import COSYVOICE_HOME
     py = f"{COSYVOICE_HOME}/.venv/bin/python"
@@ -97,6 +139,8 @@ def check_proxy():
 def main():
     checks = [("ffmpeg", check_ffmpeg), ("即梦CLI(生成)", check_dreamina),
               ("Seed2.1Pro key(反推)", check_ark),
+              ("Kimi K3(双反推腿,可选)", check_kimi),
+              ("小云雀(生成备腿,可选)", check_xyq),
               ("CosyVoice(配音)", check_cosyvoice),
               ("Seed-VC(换声,可选)", check_seedvc),
               ("剪映草稿交付", check_jianying), ("代理", check_proxy)]

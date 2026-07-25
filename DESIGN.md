@@ -110,10 +110,14 @@
 ## 4. 扩展点(怎么安全换血)
 
 - **换反推 VLM**(如换回 Gemini/换别的):重写 `seed_reverse.py`,**只要产出 §2.1 shotlist.json 不变**,下游全不动。
-- **换视频生成模型**(如换 Kling/Vidu/百炼):重写 `gen_segments.py` 的 `submit()`,**输入 §2.2 segments.json、输出 clips/<seg>.mp4** 即可。
+- **双反推合并**(`merge_reverse.py` + `k3_reverse.py`,07-19 K3对决后新增):第二腿 `k3_reverse.py`(Kimi K3 API,files→ms://<id> 视频输入,复用 seed_reverse 的切点/压缩/解析函数,同 SCHEMA 同切点源,prompt 额外加"实体纪律"硬规治其幻觉脾性),脚本做机械部分(时间对齐/逐镜并排卡/性别与运镜分歧信号灯/分歧点自动抽帧/静音闸),终审由 agent 按铁律裁决(实体信Seed·运镜时序信alt·互斥看帧·静音区文字不进台词)。契约:merged_draft.json = 标准 shotlist + `__alt_*` 候选字段,**裁决后必须删净 `__alt_*` 再喂 plan**(下游只认 §2.1 schema);dossier.md/frames/ 是给裁决 agent 的证据,不进管线。
+- **换视频生成模型**(如换 Kling/Vidu/百炼):重写 `gen_segments.py` 的 `submit()`,**输入 §2.2 segments.json、输出 clips/<seg>.mp4** 即可。已挂两个替代后端范例:`ark_gen.py`(火山Ark) / `xyq_gen.py`(小云雀 pippit-tool-cli),契约 `submit_*(...)->tid; wait_download(tid,dst)->(size,usage)`,`--i2v-backend` 切换。
 - **换 TTS**(如换云端/别的音色引擎):重写 `tts_segments.py`,**输出 audio/seg/<seg>.wav** 即可。
 - **加 B 模式(脚本本地化)**:在 plan 和 tts 之间插一步,读 segments.json,只改每段 `dialogue` 字段(用千川方法论),写回。引擎其余不动。
 - **换 rubric/评委**:生成后加一步,拿成片抽帧 + 三看漏斗 rubric 打分(待建)。
+- **原音复用**(`cut_audio.py`,07-24 量产新增):按 §2.2 段边界切原片音频到 audio/seg/<seg>.wav,内置即梦 2 秒上传下限闸(apad 垫尾,**只垫到 2s 别垫满规划时长**——垫满触发 gen 的配音超长误加时);顺产镜级 timing.json(deliver 字幕轴用)。
+- **群戏补丁**(`patch_cast.py`,收编自榴莲 run):吃 cast.json(角色名/描述/锚图/别名),按段出镜角色重建锚图挂载+逐角色声明+人数硬约束句。**硬约束句是群戏生命线**——07-23 实证:丢失它=口型错乱率 28%。
+- **帧级口型质检**(`qc_lipsync.py`,07-23 战役定型):机械部分(期望表+双侧抽帧+判读说明书)脚本化,判读交 Claude 子代理(原片帧=真值,AI 帧只答"谁在张嘴")。**禁止**用 Seed/K3 看 AI 成片转写台词做 QC——实测整段幻听。脏段处置:抽卡循环(1-2 抽/段,新旧择优)收随机错;同句两轮同错=粘性错,给时间码人修。
 
 ## 5. 参考样例 & 回归自查
 

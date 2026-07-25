@@ -37,7 +37,7 @@ def fit_duration_to_audio(seg, audio_dir):
     if not os.path.exists(wav):
         return
     ad = wav_dur(wav)
-    if ad + 0.3 > seg["duration"]:
+    if ad > seg["duration"] + 0.25:      # 留容差:配音恰好等长(如静音垫尾)不算超长,别误加时白烧积分
         import math
         new_d = min(15, math.ceil(ad + 0.5))
         if new_d > seg["duration"]:
@@ -62,11 +62,19 @@ def submit(seg, audio_dir):
         cmd = [DREAMINA, "image2video", "--image", seg["anchor"],
                "--prompt", seg["prompt"], "--duration", dur,
                "--model_version", "seedance2.0_vip", "--video_resolution", "720p", "--poll", "0"]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    out = r.stdout + r.stderr
-    m = UUID.search(out)
-    cc = re.search(r'"credit_count"\s*:\s*(\d+)', out)
-    return (m.group(0) if m else None), (cc.group(1) if cc else "?"), out
+    # 提交带退避重试:WSL对即梦偶发瞬时EOF,一枪打空整段就废(07-22实翻车)
+    out = ""
+    for attempt in range(3):
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        out = r.stdout + r.stderr
+        m = UUID.search(out)
+        if m:
+            cc = re.search(r'"credit_count"\s*:\s*(\d+)', out)
+            return m.group(0), (cc.group(1) if cc else "?"), out
+        if "out of allowed range" in out:
+            break                               # 参数级错误(如音频<2s),重试无意义
+        time.sleep(20 * (attempt + 1))
+    return None, "?", out
 
 
 def robust_download(url, dst, retries=4):
@@ -85,8 +93,14 @@ def robust_download(url, dst, retries=4):
         try:
             urllib.request.urlretrieve(url, dst)
             if os.path.getsize(dst) > 10240:      # >10KB 视为有效
-                return os.path.getsize(dst)
-            last = "文件过小"
+                # ★解码体检:大小正常但字节流损坏(NAL错)会花屏卡死且能骗过大小校验(07-25大鹅4 S2实翻车)
+                probe = subprocess.run(["ffmpeg", "-v", "error", "-i", dst, "-t", "2", "-f", "null", "-"],
+                                       capture_output=True, text=True, timeout=60)
+                if "Invalid NAL" not in probe.stderr and "Invalid data" not in probe.stderr:
+                    return os.path.getsize(dst)
+                last = "解码体检不过(字节流损坏)"
+            else:
+                last = "文件过小"
         except Exception as e:
             last = f"{type(e).__name__}"
         time.sleep(3 * (i + 1))
@@ -114,33 +128,35 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng"):
     os.makedirs(clips_dir, exist_ok=True)
     if only:
         segs = [s for s in segs if s["seg"] in only]
-    ark = None
+    alt = None
     if i2v_backend == "ark":
-        import ark_gen as ark               # 火山Ark后端(i2v/t2v,按token计费,省CLI积分)
+        import ark_gen as alt               # 火山Ark后端(i2v/t2v,按token计费,省CLI积分)
+    elif i2v_backend == "xyq":
+        import xyq_gen as alt               # 小云雀后端(pippit-tool-cli,独立credits池)
     total_credit = 0
     for seg in segs:
         name = seg["seg"]; dst = os.path.join(clips_dir, f"{name}.mp4")
         if os.path.exists(dst):
             print(f"[skip] {name} 已存在"); continue
         tag = {"mm": "口播", "i2v": "image2video"}[seg["type"]]
-        # ★i2v 段可走 Ark(口播 mm 段因需口型仍走即梦)
-        if seg["type"] == "i2v" and i2v_backend == "ark":
-            print(f"\n===== {name} {tag} {seg['duration']}s [Ark] =====", flush=True)
+        # ★i2v 段可走替代后端 Ark/小云雀(口播 mm 段因需口型仍走即梦)
+        if seg["type"] == "i2v" and alt is not None:
+            print(f"\n===== {name} {tag} {seg['duration']}s [{i2v_backend}] =====", flush=True)
             if dry:
-                print("  [dry-run] Ark i2v"); continue
+                print(f"  [dry-run] {i2v_backend} i2v"); continue
             try:
-                tid = ark.submit_i2v(seg["anchor"], seg["prompt"],
+                tid = alt.submit_i2v(seg["anchor"], seg["prompt"],
                                      duration=seg["duration"], resolution="720p", ratio="9:16")
-                print(f"  ark_task={tid}", flush=True)
-                json.dump({"seg": name, "backend": "ark", "task": tid},
+                print(f"  {i2v_backend}_task={tid}", flush=True)
+                json.dump({"seg": name, "backend": i2v_backend, "task": tid},
                           open(os.path.join(clips_dir, f"{name}.meta.json"), "w"))
-                res, usage = ark.wait_download(tid, dst)
+                res, usage = alt.wait_download(tid, dst)
                 if isinstance(res, int):
-                    print(f"  [downloaded/Ark] {name}.mp4 {res//1024}KB  tokens={usage.get('total_tokens','?')}")
+                    print(f"  [downloaded/{i2v_backend}] {name}.mp4 {res//1024}KB  usage={usage.get('total_tokens') or usage or '?'}")
                 else:
                     print(f"  [{res}]")
             except Exception as e:
-                print(f"  [ERR Ark {type(e).__name__}: {str(e)[:120]}]")
+                print(f"  [ERR {i2v_backend} {type(e).__name__}: {str(e)[:120]}]")
             continue
         fit_duration_to_audio(seg, audio_dir)
         print(f"\n===== {name} {tag} {seg['duration']}s =====", flush=True)
@@ -176,8 +192,8 @@ if __name__ == "__main__":
     ap.add_argument("--clips", default="./clips")
     ap.add_argument("--audio-dir", default=None)
     ap.add_argument("--only", default=None, help="逗号分隔段名,如 S1,S3")
-    ap.add_argument("--i2v-backend", choices=["jimeng", "ark"], default="jimeng",
-                    help="image2video段用哪个后端: jimeng(CLI积分池) 或 ark(火山按token,省积分)")
+    ap.add_argument("--i2v-backend", choices=["jimeng", "ark", "xyq"], default="jimeng",
+                    help="image2video段用哪个后端: jimeng(CLI积分池) / ark(火山按token,省积分) / xyq(小云雀credits池)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     only = set(a.only.split(",")) if a.only else None

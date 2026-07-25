@@ -13,7 +13,7 @@ updated: 2026-07-13
 反推爆款 → 迁移到目标产品 → 即梦生成 → 配音拼接。核心洞察:**病在"反推→写提示词"的转换环节会丢细节/丢动作,不在模型**。本 skill 把验证过的管线固化,每步产物可审。
 
 引擎在本目录(可插拔,换实现只改单个文件):
-`seed_reverse.py` 反推 · `plan_segments.py` 规划 · `gen_segments.py` 生成 · `tts_segments.py` 配音 · `assemble.py` 装配 · `deliver.py` 交付(剪映草稿/成品) · `doctor.py` 体检。
+`seed_reverse.py` 反推 · `merge_reverse.py` 双反推合并 · `plan_segments.py` 规划 · `cut_audio.py` 原音切段(≥2s闸+timing.json) · `patch_cast.py` 群戏/多人补丁(人数硬约束) · `gen_segments.py` 生成 · `qc_lipsync.py` 帧级口型质检 · `tts_segments.py` 配音 · `assemble.py` 装配 · `deliver.py` 交付(剪映草稿/成品) · `doctor.py` 体检。
 
 > **要改造/换引擎/接手本 skill?先读 `DESIGN.md`**(设计理由 + 数据契约 + 扩展点)。参考样例在 `references/`。
 
@@ -68,6 +68,16 @@ python3 <engine>/doctor.py
 ```
 1 反推  python3 seed_reverse.py <video> --out run/shotlist.json
         → Seed2.1Pro原生视频,一次出:硬切分镜+台词转写+对齐+product_role+key_colors
+        → 场景检测默认0.15(0.3会漏同机位跳剪);台词硬规:无人声的字幕/花字只进onscreen_text
+1b 双反推(可选,重要投放片推荐——反推多花的token省的是Seedance重抽的钱)
+        python3 k3_reverse.py <video> --out run/shotlist_k3.json
+        → Kimi K3 API腿(同SCHEMA同切点源,可与第1步并行后台跑;K3全程开思考,慢,必后台)
+        python3 merge_reverse.py run/shotlist.json run/shotlist_k3.json --video <video> --outdir run/merge
+        → 出 dossier.md(逐镜并排+性别/运镜分歧信号灯+静音闸警告)+frames/(分歧点自动抽帧)
+          +merged_draft.json(Seed实体基底+__alt_*运镜候选)
+        → agent按铁律裁决:实体/屏字信Seed·运镜时序信K3·互斥分歧看帧·静音区文字不进台词;
+          裁决时吸收__alt_subcuts细切点与绕拍/侧机位时间线进camera/action,
+          删净__alt_*字段后覆盖 run/shotlist.json(下游只认标准schema)
 1.5 清单 python3 needed_assets.py run/shotlist.json
         → ★列出这条视频需要哪些产品形态图(礼盒/内包装/单根/裸品/剖面…)+ assets 骨架
         → 拿这份清单向用户要图(每个形态都要,漏了即梦会自由发挥编产品),填好 assets.json
@@ -75,13 +85,18 @@ python3 <engine>/doctor.py
         → 自动拆超长镜/分段(≤12s≤3切)/路由(口播mm·hero/包装i2v)/写提示词(带全产品动作)
         → ★人审 run/segments.md:看分镜卡片 + 完备性关卡的"漏动作"警告,微调提示词/锚图/台词
 3 配音  python3 tts_segments.py run/segments.json --out-dir run/audio/seg
-        (降级:复用原音时跳过此步,改从原视频按段切音频)
+        (降级:复用原音时跳过此步,改用 cut_audio.py 按段切原片音频:
+         python3 cut_audio.py run/segments.json --video 原片.mp4 --shotlist run/shotlist.json --out run/audio/seg
+         ★内置即梦2秒上传下限闸(静音垫尾),并顺产镜级 timing.json 精确字幕轴;
+         ★只垫到2s下限别垫满规划时长,垫满会触发gen误加时每段白烧1秒)
         (第三档·换声不换演:python3 vc_segments.py run/audio/seg --target 音色.wav —— Seed-VC把
          原片切段音频转成目标音色,表演节奏/语气逐帧保留,治"复用原音怕查重/重配丢表演"两难;
          ⚠️整段单音色,群戏需先说话人分离,未实现)
 4 生成  python3 gen_segments.py run/segments.json --clips run/clips --audio-dir run/audio/seg [--i2v-backend ark]
         → 串行(VIP并发=1),口播段双图对口型,hero/包装段动你真图。断点续跑,--dry-run先看
-        → **两条生成腿**:即梦CLI(5500/月积分池,口播口型只能它) | 火山Ark(--i2v-backend ark:i2v段走ark_gen.py,按token计费独立于积分池)。CLI积分紧张时把i2v卸给Ark省池子。
+        → **三条生成腿**:即梦CLI(5500/月积分池,口播口型只能它) | 火山Ark(--i2v-backend ark:i2v段走ark_gen.py,按token计费独立于积分池) | 小云雀(--i2v-backend xyq:i2v段走xyq_gen.py,pippit-tool-cli模型直出,独立credits池)。CLI积分紧张时把i2v卸给Ark或小云雀省池子。
+        → ⚠小云雀腿 07-17 实测(mini_lite档):i2v 是**参考重绘语义**非首帧锚定——构图/质感优,但**品牌文字会绘错**且左上角烧死「AI生成」水印→**只接无文字要求的氛围/质感镜**,带包装文字的镜必须即梦。xyq_gen.submit_mm(带--audio口播)仍是实验性。
+        → ★用小云雀腿前先读 `references/xyq_notes.md`:与即梦声音范式根本不同(台词/音效写进prompt模型自生语音 vs 即梦wav驱动口型)、prompt黄金公式、实测记录与分工定位。
 5 装配  python3 assemble.py run/segments.json --clips run/clips --audio-dir run/audio/seg --out run/output/FULL.mp4
 6 评委  python3 judge.py run/output/FULL.mp4 [--target 原片.mp4]
         → Seed2.1Pro 按三看漏斗90分制打分+整改建议;--target 时成片+原片一起上传做真保真度对比
@@ -105,6 +120,10 @@ python3 <engine>/doctor.py
 - **真实质感/包装文字 → 动你的真图(image2video)**,别纯生成:海参质感、包装"高小参"字,image2video轻运镜能保住;text2video/重生成必糊。
 - **口播台词与配音逐字一致**,否则口型提前结束(即梦坑)。
 - **产品材质写死**(颜色+材质+形状),避审核敏感词(国货/治疗/液体接触皮肤)。
+- **TNS消毒词表(洗护/身体类必查,07-24量产16条实测)**:吊带/浴裙/抹胸/裸露肩颈/腋下清洁/瞪大双眼张嘴/泡沫遮口鼻仅露眼 → 圆领家居服/展示颈部以上/惊讶表情/泡沫覆两颊。TNS失败**不扣积分**,先原样重试(人脸误拦是概率性,常一试就过),再消毒重试,三死出手动工单(网页版拖拽,官方QA:平台内引用的图不过真人脸检测,下载重传才概率拦)。
+- **实体拍必抽帧终审(铁律,张九九3血案)**:凡"产品长相/道具/谁在场"类拍点,写提示词前必抽原片帧验证。K3实体幻觉惯犯(把三角皂看成馒头/把卸妆棉看成洗脸扑/把被窝看成冰箱);双反推裁决**按字段不按整包**——时间轴/运镜可信K3,实体一律帧证据说话,Seed实体基底地位不因K3连胜动摇。
+- **旁白型视频的路由陷阱**:全片无台词时 plan 会把人物表演镜误路由成 i2v 产品质感模板(钩子直接丢失)——旁白型一律手构 segments(mm无台词型:"本段无台词,人物不说话,口型闭合")。两腿反推的"台词"互相打架且和贴字雷同=贴字幻听,dialogue 全清空按旁白处理,原音复用自带真VO不受影响。
+- **品牌词剥离**:原片里的第三方品牌(包袋/粉扑/假货标)一律不进提示词;打假型的假货道具写"无标识粗糙皂"。
 
 ## 已知坑索引(踩过的)
 
@@ -113,8 +132,9 @@ python3 <engine>/doctor.py
 - **口型/音轨**:段配音 pad 到该段视频时长、对齐段起点;别用 `-map` 覆盖乱时轴。
 - **即梦**:seedance2.0_vip 必带 `--video_resolution`;含真人脸 image2video 易拦(纯产品图安全);内部硬切 ≤3(5崩);VIP并发=1串行。
 - **反推**:Seed2.1Pro 加 `thinking:disabled`+`stream`(快17倍不掉精度);Bash默认2分超时会掐长请求→后台跑。
+- **反推模型脾性(07-19 K3对决,帧级实证)**:错误呈镜像——Seed病=静音字幕当口播(下游TTS会真配出这句)+运镜时序粗(漏侧机位/绕拍弱化);K3病=实体幻觉(员工性别人数看错/落地镜认成货架/1件彩虹T恤编成6~8件渐变陈列/花字"日常"抄成"日程")。故 merge_reverse 裁决分工=实体信Seed、运镜信K3;单模型跑时"开头台词"必过静音闸,外部反推的实体描述一律存疑。
 - **代理**:★全管线(火山API/即梦CLI/即梦CDN下载)国内直连,**无需任何代理**——代理是 Gemini 反推时代的遗留,已随引擎更换退役。系统全局 http_proxy 已被脚本显式绕开;极个别网络下载 CDN 失败时才设 DAIHUO_DOWNLOAD_PROXY。
-- **key/模型**:ark key 用环境变量 ARK_API_KEY;反推/评委模型默认公共模型名(可用 ARK_SEED_MODEL 覆盖),不再依赖私人 endpoint ID。
+- **key/模型**:ark key 用环境变量 ARK_API_KEY;反推/评委模型默认公共模型名(可用 ARK_SEED_MODEL 覆盖),不再依赖私人 endpoint ID。小云雀 key 用 XYQ_ACCESS_KEY 或 ~/.config/daihuo-fanpai/xyq_key;模型默认交CLI(普通户 Seedance_2.0_mini_lite),用 XYQ_VIDEO_MODEL 覆盖。Kimi K3(双反推腿)key 用 KIMI_API_KEY 或 ~/.config/daihuo-fanpai/kimi_key,端点 api.moonshot.cn(国内直连),模型 kimi-k3(KIMI_K3_MODEL 覆盖);K3 始终开思考不可关、别传 temperature/thinking 参数;视频走 files(purpose=video)→ms://<id>,用完即删;WSL 对 moonshot 偶发连接抖动,k3_reverse 已内置3次重试。
 - **配音时长**:B模式改词后配音可能比原镜长——gen 已按段 wav 实际时长自动上调生成时长(上限15s,逼近上限会告警要求拆段)。
 - **后台命令**:别同时用 `nohup &` + run_in_background(外层立即返回致误报completed)。
 - **换声(Seed-VC)质量两要素**:①参考音频信噪比≥30dB(脏参考的底噪会被当音色学进产物,vc_segments已内置参考体检);②嫌有金属感/电流感伪影→`--steps 50~100`(默认30,换时间买干净)。
@@ -122,6 +142,12 @@ python3 <engine>/doctor.py
 - **群戏(三角色情景剧,榴莲片验证)**:单主播模板不适配群戏 → 逐段按 shotlist subject 判断出镜角色挂多张人物锚定图+逐角色人设声明(参考 runs/榴莲复刻/patch_cast.py);**必加人数硬约束**"画面中自始至终只有X、Y这N个角色,不要出现任何其他人物"(不加会幻觉多生成人物,实测);产品未登场的段必须剥离产品图防剧透;多人轮流说话的口型分配即梦能做对(Seed质检实证)。原音复用时字幕轴用 shotlist 镜级时间构造 timing.json(镜头时间=音频时间,精确)。
 - **judge双视频**:对比模式合并 >~50MB 会 SSLEOF 断连 → 已改按视频数均分上传预算自动压小。
 - **剪映草稿**:剪映 6+ 保存草稿会加密,但**读明文草稿正常**(10.7 实测:识别/打开/编辑/回存全通)。此结论随剪映升级可能失效,失效降级 `--mode final`。草稿引用的是 Windows 绝对路径 → deliver 已把素材 copy 进草稿目录自包含+改写 /mnt/x/→X:/;草稿根目录用 DAIHUO_JY_DRAFTS 或 ~/.config/daihuo-fanpai/jy_drafts 配置。
+- **幽灵querying(07-22骗了一下午)**:失败任务被旧版即梦CLI错报成"querying"(v1.4.14已修),配合查询接口对不存在任务也回querying,会诱导你猜僵尸单/队列/风控。**先查 ~/.dreamina_cli/logs/ 日志再推理**——真因往往一行就写着(当日真因=音频切片<2秒被上传拒收)。CLI保持最新:`curl -fsSL https://jimeng.jianying.com/cli | bash`。
+- **音频上传2秒下限**:即梦mm的音频输入必须2-15秒,快切短视频的段音频常<2s→提交即死。cut_audio已内置apad垫到2s;自切音频务必过此闸。
+- **下载解码体检**:CDN偶发交付坏字节流(大小正常但NAL单元全错→成片卡死花屏),大小校验拦不住;robust_download已内置下载后ffmpeg解码探针,坏流自动重下。批量产后可全量扫一遍:`ffmpeg -v error -i clip.mp4 -f null -`。
+- **K3引擎429**:moonshot晚间高峰会engine_overloaded,退避≥90s;赶产能时单腿Seed+1fps拼图校验时间轴可顶(Seed弱在指派,拼图正好补)。
+- **群戏口型错乱治理(07-23战役,28%→6%)**:①人数硬约束句是生命线,patch_cast永不删;②说话人点名指令压不住随机错——治法=抽卡循环(每段1-2抽+帧级QC择优);③同句两轮同错=粘性错误,再抽无用,给时间码剪映手修;④**禁止用Seed/K3看AI片转写台词做QC**——会整段幻听(两轮转写互不相同且全不符台账),口型QC只能走qc_lipsync.py的帧级方案(原片帧=真值,AI帧只答谁张嘴)。
+- **提交/上传瞬时EOF**:WSL对即梦偶发连接抖动(user_info/imagex上传),gen提交已内置3次退避;批量脚本外层再包轮次循环兜底(missing段重跑)即近零人工。
 
 ## 可移植性
 
