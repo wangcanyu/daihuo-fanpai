@@ -64,6 +64,33 @@
 
 ## 快速开始
 
+### 用 agent 安装(推荐)
+
+整个仓库就是一个 skill,装法就是克隆到 agent 的 skills 目录。打开 Claude Code,发这句话:
+
+```
+把 https://github.com/wangcanyu/daihuo-fanpai 克隆到 ~/.claude/skills/daihuo-fanpai,
+然后进目录跑 python3 doctor.py 体检,轻依赖直接帮我装好,凭证类告诉我怎么配
+```
+
+装完**重开一个会话**(skill 列表在会话启动时加载),之后说人话就能开工,agent 会自动触发 skill、按流水线跑、该人审的地方停下来等你过稿:
+
+```
+复刻这条带货视频:目标.mp4,原台词原产品                    ← A 模式
+把 目标.mp4 换成我的海参重做一条,台词按我的产品本地化       ← B 模式
+```
+
+等价的手动安装:
+
+```bash
+git clone https://github.com/wangcanyu/daihuo-fanpai.git ~/.claude/skills/daihuo-fanpai
+cd ~/.claude/skills/daihuo-fanpai && python3 doctor.py
+```
+
+> 其他 agent 只要认 SKILL.md 约定,同样装法;不当 skill 用也行,直接按下面的命令手动跑。
+
+### 手动跑流水线
+
 ```bash
 python3 doctor.py                                   # 0 体检:告诉你缺什么、怎么补
 python3 seed_reverse.py 目标.mp4 --out run/shotlist.json
