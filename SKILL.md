@@ -13,7 +13,7 @@ updated: 2026-07-13
 反推爆款 → 迁移到目标产品 → 即梦生成 → 配音拼接。核心洞察:**病在"反推→写提示词"的转换环节会丢细节/丢动作,不在模型**。本 skill 把验证过的管线固化,每步产物可审。
 
 引擎在本目录(可插拔,换实现只改单个文件):
-`seed_reverse.py` 反推 · `merge_reverse.py` 双反推合并 · `plan_segments.py` 规划 · `cut_audio.py` 原音切段(≥2s闸+timing.json) · `patch_cast.py` 群戏/多人补丁(人数硬约束) · `gen_segments.py` 生成 · `qc_lipsync.py` 帧级口型质检 · `tts_segments.py` 配音 · `assemble.py` 装配 · `deliver.py` 交付(剪映草稿/成品) · `doctor.py` 体检。
+`seed_reverse.py` 反推 · `merge_reverse.py` 双反推合并 · `plan_segments.py` 规划 · `h3_prompt.py` 海螺提示词生成 · `cut_audio.py` 原音切段(≥2s闸+timing.json) · `patch_cast.py` 群戏/多人补丁(人数硬约束) · `gen_segments.py` 生成 · `qc_lipsync.py` 帧级口型质检 · `tts_segments.py` 配音 · `assemble.py` 装配 · `deliver.py` 交付(剪映草稿/成品) · `doctor.py` 体检。
 生成后端(可插拔,契约 `submit_*()->tid` / `wait_download(tid,dst)->(size,usage)`):即梦CLI(内置) · `ark_gen.py` 火山 · `xyq_gen.py` 小云雀 · `rh_gen.py` RunningHub海螺h3。
 
 > **要改造/换引擎/接手本 skill?先读 `DESIGN.md`**(设计理由 + 数据契约 + 扩展点)。参考样例在 `references/`。
@@ -89,6 +89,15 @@ python3 <engine>/doctor.py
           `--hard-max-cuts`**(不设闸会把9个镜头塞一段,超即梦"硬切5崩"红线和h3已验的3刀)。
           本片实测:10段50s → 8段42s,浪费39%→28%。默认 --min-dur 0 = 旧行为不变。
         → ★人审 run/segments.md:看分镜卡片 + 完备性关卡的"漏动作"警告,微调提示词/锚图/台词
+2.5 h3提示词(只在走 rh 腿时需要)
+        python3 h3_prompt.py run/segments.json --shotlist run/shotlist.json --assets assets.json --out-dir run/prompts
+        → plan 出的是【即梦风格中文提示词】,h3 吃不了 → 本步转成官方 Ref2VA 六段式:
+          机械部分全自动(切点MM:SS.mmm换算/Picture编号与逐图声明/retention表/人数硬约束/
+          ★台词自动剥离/说话或闭嘴指令/贴字指令过滤/每镜钉死环境防参考图带跑背景);
+          中文动作用 Ark 一次批量译英(--no-translate 可关,留中文由 agent 润色)。
+        → 敏感词**只报警不自动改**:RH 失败不计费,先按原样试,被拒再消毒
+          (08-09 教训:预防性把"针管"改成"美妆工具柄",道具直接走形,钩子废了)
+        → 产物 prompts/<seg>_h3.txt + images.json,人过一遍再喂 gen_segments
 3 配音  python3 tts_segments.py run/segments.json --out-dir run/audio/seg
         (降级:复用原音时跳过此步,改用 cut_audio.py 按段切原片音频:
          python3 cut_audio.py run/segments.json --video 原片.mp4 --shotlist run/shotlist.json --out run/audio/seg
@@ -104,6 +113,7 @@ python3 <engine>/doctor.py
           急件/要1080p·4k → `--jimeng-model seedance2.0_vip`;长段不想切碎 → `seedance2.5`(26积分/秒,时长上限30s)。
         → **四条生成腿**:即梦CLI(5500/月积分池,口播主力) | 火山Ark(--i2v-backend ark,按token,★含人脸参考图政策级拦截,只走纯产品i2v) | 小云雀(--i2v-backend xyq,独立credits池) | RunningHub海螺h3(--i2v-backend rh / --mm-backend rh,钱包≈¥0.48/秒)。CLI积分紧张时把i2v卸给Ark/小云雀省池子。
         → ★**口播mm段有两条腿**:即梦(默认,口型最稳)和海螺h3(--mm-backend rh,audioUrls驱动口型,08-07参阿婆46s片实证)。积分耗尽时口播不再卡死,但要花钱且首用须跑 qc_lipsync 验收。
+        → ★走 rh 腿前先跑 `h3_prompt.py`(下方 2.5 步)出六段式提示词,别拿即梦的中文提示词硬喂
         → ★用 rh 腿前先读 `references/h3/README.md`:**审查只审prompt文本不审图/音→台词一律不进prompt**、产物多送0.5s尾帧、结果URL只活24h、Ref2VA六段式提示词与 [Shot N] At MM:SS.mmm 段内调度。
         → ⚠小云雀腿 07-17 实测(mini_lite档):i2v 是**参考重绘语义**非首帧锚定——构图/质感优,但**品牌文字会绘错**且左上角烧死「AI生成」水印→**只接无文字要求的氛围/质感镜**,带包装文字的镜必须即梦。xyq_gen.submit_mm(带--audio口播)仍是实验性。
         → ★用小云雀腿前先读 `references/xyq_notes.md`:与即梦声音范式根本不同(台词/音效写进prompt模型自生语音 vs 即梦wav驱动口型)、prompt黄金公式、实测记录与分工定位。
@@ -139,7 +149,7 @@ python3 <engine>/doctor.py
 - **产品材质写死**(颜色+材质+形状),避审核敏感词(国货/治疗/液体接触皮肤)。
 - **TNS消毒词表(洗护/身体类必查,07-24量产16条实测)**:吊带/浴裙/抹胸/裸露肩颈/腋下清洁/瞪大双眼张嘴/泡沫遮口鼻仅露眼 → 圆领家居服/展示颈部以上/惊讶表情/泡沫覆两颊。TNS失败**不扣积分**,先原样重试(人脸误拦是概率性,常一试就过),再消毒重试,三死出手动工单(网页版拖拽,官方QA:平台内引用的图不过真人脸检测,下载重传才概率拦)。
 - **实体拍必抽帧终审(铁律,张九九3血案)**:凡"产品长相/道具/谁在场"类拍点,写提示词前必抽原片帧验证。K3实体幻觉惯犯(把三角皂看成馒头/把卸妆棉看成洗脸扑/把被窝看成冰箱);双反推裁决**按字段不按整包**——时间轴/运镜可信K3,实体一律帧证据说话,Seed实体基底地位不因K3连胜动摇。
-- **旁白型视频的路由陷阱**:全片无台词时 plan 会把人物表演镜误路由成 i2v 产品质感模板(钩子直接丢失)——旁白型一律手构 segments(mm无台词型:"本段无台词,人物不说话,口型闭合")。两腿反推的"台词"互相打架且和贴字雷同=贴字幻听,dialogue 全清空按旁白处理,原音复用自带真VO不受影响。
+- **旁白型视频的路由陷阱(08-09 已在 plan_segments 结构性修复,不必再手构)**:全片无台词时旧版 plan 会把人物表演镜误路由成 i2v 产品质感模板(钩子直接丢失)。现在 `seg_role` 认【显式 `host_on_camera=true`】即判口播,无台词也走 mm(拿得到主播锚图,提示词自动写"本段无台词,口型闭合");仅露手的 hero_real 镜(host_on_camera=false)不受影响仍走 i2v。旧 shotlist 无该字段则行为不变。两腿反推的"台词"互相打架且和贴字雷同=贴字幻听,dialogue 全清空按旁白处理,原音复用自带真VO不受影响。
 - **品牌词剥离**:原片里的第三方品牌(包袋/粉扑/假货标)一律不进提示词;打假型的假货道具写"无标识粗糙皂"。
 
 ## 已知坑索引(踩过的)
