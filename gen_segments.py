@@ -148,8 +148,46 @@ def _load_backend(name):
     return None
 
 
+# 已验证支持并发提交的后端。★即梦【不在此列】:CLI 通道账号级并发上限=1,
+# 多提一条就 ret=1310 ExceedConcurrencyLimit(换 --session 也没用,08-09 穷举过);
+# RH 海螺 h3 实测 3 段同时提交全接受、完成间隔仅17-23秒=真并行。
+# ark/xyq 未测并发,保守按 1 处理,验过再加进来。
+CONCURRENT_BACKENDS = {"rh"}
+
+
+def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
+    """替代后端的单段生成(提交→轮询→下载)。线程安全,供并发池调用。"""
+    name = seg["seg"]; dst = os.path.join(clips_dir, f"{name}.mp4")
+    tag = {"mm": "口播", "i2v": "image2video"}[seg["type"]]
+    print(f"[{name}] {tag} {seg['duration']}s [{use_name}] 提交中", flush=True)
+    try:
+        if seg["type"] == "mm":
+            fit_duration_to_audio(seg, audio_dir)
+            wav = os.path.join(audio_dir, f"{name}.wav") if audio_dir else None
+            wav = wav if (wav and os.path.exists(wav)) else None
+            tid = use.submit_mm(seg["images"], wav, seg["prompt"],
+                                duration=seg["duration"], resolution=res, ratio="9:16")
+        else:
+            tid = use.submit_i2v(seg["anchor"], seg["prompt"],
+                                 duration=seg["duration"], resolution=res, ratio="9:16")
+        print(f"[{name}] task={tid}", flush=True)
+        json.dump({"seg": name, "backend": use_name, "task": tid},
+                  open(os.path.join(clips_dir, f"{name}.meta.json"), "w"))
+        res_, usage = use.wait_download(tid, dst)
+        if isinstance(res_, int):
+            money = (usage or {}).get("thirdPartyConsumeMoney")
+            extra = f"  实扣¥{money}" if money else f"  usage={usage.get('total_tokens') or usage or '?'}"
+            print(f"[{name}] ★完成 {res_//1024}KB{extra}", flush=True)
+            return {"seg": name, "money": money}
+        print(f"[{name}] {res_}  task={tid} 可补抓", flush=True)
+        return {"seg": name, "error": str(res_), "task": tid}
+    except Exception as e:
+        print(f"[{name}] ERR {type(e).__name__}: {str(e)[:150]}", flush=True)
+        return {"seg": name, "error": f"{type(e).__name__}: {e}"}
+
+
 def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_backend="jimeng",
-        jimeng_model=None, jimeng_res="720p"):
+        jimeng_model=None, jimeng_res="720p", concurrency=1, alt_res="720p"):
     segs = json.load(open(plan_path))
     os.makedirs(clips_dir, exist_ok=True)
     if only:
@@ -164,11 +202,43 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
         print(f"[gen] 即梦档位={jm}(非VIP慢速排队,8积分/秒,便宜43%但要排队十几分钟起)", flush=True)
     else:
         print(f"[gen] 即梦档位={jm}(快速/高价档)", flush=True)
+    # ★并发调度:走替代后端且该后端已验证支持并发 → 线程池;即梦段永远串行(通道限流=1)
+    todo = [s for s in segs if not os.path.exists(os.path.join(clips_dir, f"{s['seg']}.mp4"))]
+    for s in segs:
+        if s not in todo:
+            print(f"[skip] {s['seg']} 已存在")
+
+    def _backend_of(s):
+        return (alt, i2v_backend) if s["type"] == "i2v" else (
+            (mm_alt, mm_backend) if s["type"] == "mm" else (None, ""))
+
+    pool_segs = [s for s in todo
+                 if _backend_of(s)[0] is not None and _backend_of(s)[1] in CONCURRENT_BACKENDS]
+    if concurrency > 1 and pool_segs and dry:
+        print(f"\n[dry-run] {len(pool_segs)} 段将走并发池(并发"
+              f"{min(concurrency, len(pool_segs))}): {[s['seg'] for s in pool_segs]}", flush=True)
+    if concurrency > 1 and pool_segs and not dry:
+        n = min(concurrency, len(pool_segs))
+        print(f"\n[gen] {len(pool_segs)} 段走并发池(并发{n},后端已验证支持)", flush=True)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=n) as ex:
+            futs = [ex.submit(_gen_alt, s, *_backend_of(s), clips_dir, audio_dir, alt_res)
+                    for s in pool_segs]
+            money = [f.result() for f in futs]
+        spent = sum(float(m["money"]) for m in money if m and m.get("money"))
+        if spent:
+            print(f"[gen] 并发池实扣 ¥{spent:.2f}", flush=True)
+        bad = [m["seg"] for m in money if m and m.get("error")]
+        if bad:
+            print(f"[gen][⚠] 并发池失败段 {bad} — meta.json 存了 task,可补抓或重跑本命令", flush=True)
+        todo = [s for s in todo if s not in pool_segs]
+    elif concurrency > 1 and not pool_segs:
+        print(f"[gen] --concurrency {concurrency} 未生效:没有段走已验证支持并发的后端"
+              f"({'/'.join(sorted(CONCURRENT_BACKENDS))});即梦通道限流=1,只能串行", flush=True)
+
     total_credit = 0
-    for seg in segs:
+    for seg in todo:
         name = seg["seg"]; dst = os.path.join(clips_dir, f"{name}.mp4")
-        if os.path.exists(dst):
-            print(f"[skip] {name} 已存在"); continue
         tag = {"mm": "口播", "i2v": "image2video"}[seg["type"]]
         # ★替代后端: i2v 段可走 Ark/小云雀/RH; mm 口播段目前只有即梦和 RH 海螺能对口型
         use = alt if seg["type"] == "i2v" else (mm_alt if seg["type"] == "mm" else None)
@@ -242,8 +312,13 @@ if __name__ == "__main__":
                          "seedance2.5=26积分/秒但时长上限30s")
     ap.add_argument("--jimeng-res", default="720p",
                     help="即梦分辨率,默认720p。1080p/4k 仅 seedance2.0_vip 支持")
+    ap.add_argument("--concurrency", type=int, default=1,
+                    help="并发提交段数(默认1串行)。★只对已验证支持并发的后端生效(目前 rh);"
+                         "即梦 CLI 通道账号级限流=1,多提必 ret=1310,换 session 也没用")
+    ap.add_argument("--alt-res", default="720p",
+                    help="替代后端的分辨率(rh: 720p→768P ¥0.48/秒 / 2k ¥0.77/秒)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     only = set(a.only.split(",")) if a.only else None
     run(a.plan, a.clips, a.audio_dir, only, a.dry_run, a.i2v_backend, a.mm_backend,
-        a.jimeng_model, a.jimeng_res)
+        a.jimeng_model, a.jimeng_res, a.concurrency, a.alt_res)
