@@ -17,6 +17,12 @@ import argparse, json, os, re, subprocess, time, urllib.request
 
 from config import DOWNLOAD_PROXY
 DREAMINA = os.path.expanduser("~/.local/bin/dreamina")
+# ★即梦档位默认走【非VIP慢速排队】seedance2.0:8积分/秒 vs VIP的14,便宜43%(08-09实测5s=40分)。
+#   代价是真排队(实测十几分钟起),只接非急件批量——等待由 agent 扛,省的是真金白银。
+#   急件/要1080p·4k → --jimeng-model seedance2.0_vip(VIP档才支持720p以上)。
+#   seedance2.5 → 26积分/秒但 duration 上限 30s(2.0是15s),整段长片不必切碎时才划算。
+JIMENG_MODEL = os.environ.get("DAIHUO_JIMENG_MODEL", "seedance2.0")
+VIP_ONLY_RES = {"1080p", "4k"}
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
@@ -47,7 +53,10 @@ def fit_duration_to_audio(seg, audio_dir):
             print(f"  [⚠时长] 配音{ad:.1f}s 逼近 15s 上限,放不下会截尾——请回 plan 拆段或精简台词")
 
 
-def submit(seg, audio_dir):
+def submit(seg, audio_dir, model=None, res="720p"):
+    model = model or JIMENG_MODEL
+    if res in VIP_ONLY_RES and not model.endswith("_vip"):
+        raise ValueError(f"{res} 只有 VIP 档支持,请加 --jimeng-model seedance2.0_vip")
     t = seg["type"]; dur = str(seg["duration"])
     if t == "mm":
         cmd = [DREAMINA, "multimodal2video"]
@@ -57,11 +66,11 @@ def submit(seg, audio_dir):
         if wav and os.path.exists(wav):
             cmd += ["--audio", wav]
         cmd += ["--prompt", seg["prompt"], "--duration", dur, "--ratio", "9:16",
-                "--model_version", "seedance2.0_vip", "--video_resolution", "720p", "--poll", "0"]
+                "--model_version", model, "--video_resolution", res, "--poll", "0"]
     else:
         cmd = [DREAMINA, "image2video", "--image", seg["anchor"],
                "--prompt", seg["prompt"], "--duration", dur,
-               "--model_version", "seedance2.0_vip", "--video_resolution", "720p", "--poll", "0"]
+               "--model_version", model, "--video_resolution", res, "--poll", "0"]
     # 提交带退避重试:WSL对即梦偶发瞬时EOF,一枪打空整段就废(07-22实翻车)
     out = ""
     for attempt in range(3):
@@ -107,8 +116,14 @@ def robust_download(url, dst, retries=4):
     raise RuntimeError(f"下载失败(重试{retries}次): {last}")
 
 
-def wait_download(sid, dst, tries=40, gap=15):
-    """轮询 success → 从 video_url 稳健下载(避开 CLI 截断)"""
+def wait_download(sid, dst, tries=None, gap=15, model=None):
+    """轮询 success → 从 video_url 稳健下载(避开 CLI 截断)。
+    ★轮询预算必须跟档位走:VIP快速通道几分钟就出,**非VIP慢速排队实测18分钟还在queue**,
+      沿用旧的 40×15s=10分钟会段段误报 pending(08-09 切默认档时发现)。
+      非VIP给 240×15s=60分钟;超时不代表失败,submit_id 已存 meta.json 可补抓。"""
+    if tries is None:
+        vip = (model or JIMENG_MODEL).endswith("_vip") or (model or JIMENG_MODEL) == "seedance2.5"
+        tries = 40 if vip else 240
     for _ in range(tries):
         out = subprocess.run([DREAMINA, "query_result", "--submit_id=" + sid],
                              capture_output=True, text=True).stdout
@@ -123,46 +138,71 @@ def wait_download(sid, dst, tries=40, gap=15):
     return None  # 超时未完成
 
 
-def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng"):
+def _load_backend(name):
+    if name == "ark":
+        import ark_gen as m; return m         # 火山Ark(i2v/t2v,按token计费,省CLI积分)
+    if name == "xyq":
+        import xyq_gen as m; return m         # 小云雀(pippit-tool-cli,独立credits池)
+    if name == "rh":
+        import rh_gen as m; return m          # RunningHub海螺h3(钱包计费≈¥0.48/秒,唯一的mm备腿)
+    return None
+
+
+def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_backend="jimeng",
+        jimeng_model=None, jimeng_res="720p"):
     segs = json.load(open(plan_path))
     os.makedirs(clips_dir, exist_ok=True)
     if only:
         segs = [s for s in segs if s["seg"] in only]
-    alt = None
-    if i2v_backend == "ark":
-        import ark_gen as alt               # 火山Ark后端(i2v/t2v,按token计费,省CLI积分)
-    elif i2v_backend == "xyq":
-        import xyq_gen as alt               # 小云雀后端(pippit-tool-cli,独立credits池)
+    alt = _load_backend(i2v_backend)
+    mm_alt = _load_backend(mm_backend)
+    if mm_backend == "rh":
+        print("[gen][⚠] 口播段走 RunningHub 海螺h3:①提示词里【不能】有台词原文/价格词(审查只审文本,"
+              "会拒稿) ②首片请跑 qc_lipsync.py 帧级验收口型 ③钱包计费,确认用户已同意")
+    jm = jimeng_model or JIMENG_MODEL
+    if not jm.endswith("_vip") and jm != "seedance2.5":
+        print(f"[gen] 即梦档位={jm}(非VIP慢速排队,8积分/秒,便宜43%但要排队十几分钟起)", flush=True)
+    else:
+        print(f"[gen] 即梦档位={jm}(快速/高价档)", flush=True)
     total_credit = 0
     for seg in segs:
         name = seg["seg"]; dst = os.path.join(clips_dir, f"{name}.mp4")
         if os.path.exists(dst):
             print(f"[skip] {name} 已存在"); continue
         tag = {"mm": "口播", "i2v": "image2video"}[seg["type"]]
-        # ★i2v 段可走替代后端 Ark/小云雀(口播 mm 段因需口型仍走即梦)
-        if seg["type"] == "i2v" and alt is not None:
-            print(f"\n===== {name} {tag} {seg['duration']}s [{i2v_backend}] =====", flush=True)
+        # ★替代后端: i2v 段可走 Ark/小云雀/RH; mm 口播段目前只有即梦和 RH 海螺能对口型
+        use = alt if seg["type"] == "i2v" else (mm_alt if seg["type"] == "mm" else None)
+        use_name = i2v_backend if seg["type"] == "i2v" else mm_backend
+        if use is not None:
+            print(f"\n===== {name} {tag} {seg['duration']}s [{use_name}] =====", flush=True)
             if dry:
-                print(f"  [dry-run] {i2v_backend} i2v"); continue
+                print(f"  [dry-run] {use_name} {seg['type']}"); continue
             try:
-                tid = alt.submit_i2v(seg["anchor"], seg["prompt"],
-                                     duration=seg["duration"], resolution="720p", ratio="9:16")
-                print(f"  {i2v_backend}_task={tid}", flush=True)
-                json.dump({"seg": name, "backend": i2v_backend, "task": tid},
-                          open(os.path.join(clips_dir, f"{name}.meta.json"), "w"))
-                res, usage = alt.wait_download(tid, dst)
-                if isinstance(res, int):
-                    print(f"  [downloaded/{i2v_backend}] {name}.mp4 {res//1024}KB  usage={usage.get('total_tokens') or usage or '?'}")
+                if seg["type"] == "mm":
+                    fit_duration_to_audio(seg, audio_dir)
+                    wav = os.path.join(audio_dir, f"{name}.wav") if audio_dir else None
+                    wav = wav if (wav and os.path.exists(wav)) else None
+                    tid = use.submit_mm(seg["images"], wav, seg["prompt"],
+                                        duration=seg["duration"], resolution="720p", ratio="9:16")
                 else:
-                    print(f"  [{res}]")
+                    tid = use.submit_i2v(seg["anchor"], seg["prompt"],
+                                         duration=seg["duration"], resolution="720p", ratio="9:16")
+                print(f"  {use_name}_task={tid}", flush=True)
+                json.dump({"seg": name, "backend": use_name, "task": tid},
+                          open(os.path.join(clips_dir, f"{name}.meta.json"), "w"))
+                res, usage = use.wait_download(tid, dst)
+                if isinstance(res, int):
+                    print(f"  [downloaded/{use_name}] {name}.mp4 {res//1024}KB  usage={usage.get('total_tokens') or usage or '?'}")
+                else:
+                    print(f"  [{res}]  task={tid} 可补抓")
             except Exception as e:
-                print(f"  [ERR {i2v_backend} {type(e).__name__}: {str(e)[:120]}]")
+                print(f"  [ERR {use_name} {type(e).__name__}: {str(e)[:120]}]")
             continue
         fit_duration_to_audio(seg, audio_dir)
         print(f"\n===== {name} {tag} {seg['duration']}s =====", flush=True)
         if dry:
             print("  [dry-run] cmd 略"); continue
-        sid, cc, out = submit(seg, audio_dir)
+        sid, cc, out = submit(seg, audio_dir, jimeng_model, jimeng_res)
         if not sid:
             print(f"  [FAIL 提交无id] {out[-300:]}"); continue
         print(f"  submit_id={sid} credit={cc}", flush=True)
@@ -174,7 +214,7 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng"):
         json.dump({"seg": name, "submit_id": sid},
                   open(os.path.join(clips_dir, f"{name}.meta.json"), "w"))
         try:                                    # ★单段失败不带崩整批,submit_id已存可补抓
-            res = wait_download(sid, dst)
+            res = wait_download(sid, dst, model=jm)
             if isinstance(res, int) and res > 0:
                 print(f"  [downloaded] {name}.mp4 {res//1024}KB")
             elif res is None:
@@ -192,9 +232,18 @@ if __name__ == "__main__":
     ap.add_argument("--clips", default="./clips")
     ap.add_argument("--audio-dir", default=None)
     ap.add_argument("--only", default=None, help="逗号分隔段名,如 S1,S3")
-    ap.add_argument("--i2v-backend", choices=["jimeng", "ark", "xyq"], default="jimeng",
-                    help="image2video段用哪个后端: jimeng(CLI积分池) / ark(火山按token,省积分) / xyq(小云雀credits池)")
+    ap.add_argument("--i2v-backend", choices=["jimeng", "ark", "xyq", "rh"], default="jimeng",
+                    help="image2video段后端: jimeng(CLI积分池) / ark(火山按token) / xyq(小云雀credits) / rh(海螺,钱包¥0.48/秒)")
+    ap.add_argument("--mm-backend", choices=["jimeng", "rh"], default="jimeng",
+                    help="口播段后端: jimeng(CLI积分池,默认) / rh(海螺h3,audioUrls驱动口型;积分耗尽时的付费替代)")
+    ap.add_argument("--jimeng-model", default=None,
+                    help=f"即梦档位,默认 {JIMENG_MODEL}(非VIP慢速,8积分/秒)。"
+                         "急件或要1080p/4k用 seedance2.0_vip(14积分/秒);"
+                         "seedance2.5=26积分/秒但时长上限30s")
+    ap.add_argument("--jimeng-res", default="720p",
+                    help="即梦分辨率,默认720p。1080p/4k 仅 seedance2.0_vip 支持")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     only = set(a.only.split(",")) if a.only else None
-    run(a.plan, a.clips, a.audio_dir, only, a.dry_run, a.i2v_backend)
+    run(a.plan, a.clips, a.audio_dir, only, a.dry_run, a.i2v_backend, a.mm_backend,
+        a.jimeng_model, a.jimeng_res)

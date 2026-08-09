@@ -32,3 +32,9 @@ Thumbs.db
 # 内置音色(真人主播声纹,不公开)与agent交接文档
 voices/
 HANDOFF.md
+
+# 第三方原文存档(不再分发,只留我们自己的用前必读 README + 上游地址)
+references/h3/SKILL.md
+references/h3/base-en.txt
+references/h3/ref-en.txt
+references/h3/runninghub-*.md

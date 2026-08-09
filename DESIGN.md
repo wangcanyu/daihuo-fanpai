@@ -111,7 +111,8 @@
 
 - **换反推 VLM**(如换回 Gemini/换别的):重写 `seed_reverse.py`,**只要产出 §2.1 shotlist.json 不变**,下游全不动。
 - **双反推合并**(`merge_reverse.py` + `k3_reverse.py`,07-19 K3对决后新增):第二腿 `k3_reverse.py`(Kimi K3 API,files→ms://<id> 视频输入,复用 seed_reverse 的切点/压缩/解析函数,同 SCHEMA 同切点源,prompt 额外加"实体纪律"硬规治其幻觉脾性),脚本做机械部分(时间对齐/逐镜并排卡/性别与运镜分歧信号灯/分歧点自动抽帧/静音闸),终审由 agent 按铁律裁决(实体信Seed·运镜时序信alt·互斥看帧·静音区文字不进台词)。契约:merged_draft.json = 标准 shotlist + `__alt_*` 候选字段,**裁决后必须删净 `__alt_*` 再喂 plan**(下游只认 §2.1 schema);dossier.md/frames/ 是给裁决 agent 的证据,不进管线。
-- **换视频生成模型**(如换 Kling/Vidu/百炼):重写 `gen_segments.py` 的 `submit()`,**输入 §2.2 segments.json、输出 clips/<seg>.mp4** 即可。已挂两个替代后端范例:`ark_gen.py`(火山Ark) / `xyq_gen.py`(小云雀 pippit-tool-cli),契约 `submit_*(...)->tid; wait_download(tid,dst)->(size,usage)`,`--i2v-backend` 切换。
+- **换视频生成模型**(如换 Kling/Vidu/百炼):重写 `gen_segments.py` 的 `submit()`,**输入 §2.2 segments.json、输出 clips/<seg>.mp4** 即可。已挂三个替代后端范例:`ark_gen.py`(火山Ark) / `xyq_gen.py`(小云雀 pippit-tool-cli) / `rh_gen.py`(RunningHub 海螺h3),契约 `submit_*(...)->tid; wait_download(tid,dst)->(size,usage)`,`--i2v-backend` 切 i2v 段、`--mm-backend` 切口播段。**口播段的路由分两级**:能不能对口型是硬门槛(目前只有即梦 CLI 和海螺 h3 过关,Ark 因人脸参考图政策拦截出局、小云雀未验),过了门槛再按计费池选腿。新增后端若不支持音频驱动口型,只挂 `--i2v-backend` 即可,别进 mm 选项。
+- **接新后端时必答三个问题**(08-09 定,吃过亏才补的):①**最短生成时长**是多少?它决定 `plan_segments --min-dur` 要不要开填满模式——快切片每段才1~3秒时,后端下限就是纯浪费(本片曾39%的钱花在被裁掉的画面上)。②**产物比请求时长多多少?** 决定装配是否必须 `--trim-to-plan`。③**轮询预算**够不够?排队档(即梦非VIP实测18分钟)沿用快速档的10分钟预算会段段误报 pending。
 - **换 TTS**(如换云端/别的音色引擎):重写 `tts_segments.py`,**输出 audio/seg/<seg>.wav** 即可。
 - **加 B 模式(脚本本地化)**:在 plan 和 tts 之间插一步,读 segments.json,只改每段 `dialogue` 字段(用千川方法论),写回。引擎其余不动。
 - **换 rubric/评委**:生成后加一步,拿成片抽帧 + 三看漏斗 rubric 打分(待建)。

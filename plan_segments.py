@@ -62,19 +62,37 @@ def split_long_shots(shots, max_dur=15):
     return out
 
 
-def group_shots(shots):
-    """按 ≤MAX_DUR 且 ≤MAX_CUTS 把连续镜头归并成段"""
+def group_shots(shots, max_cuts=MAX_CUTS, min_dur=0, hard_max_cuts=None):
+    """按 ≤MAX_DUR 且 ≤max_cuts 把连续镜头归并成段。
+
+    ★min_dur = 后端的最短生成时长(即梦4s / 海螺h3 5s)。>0 时开启"填满"模式:
+      段跨度还没够 min_dur 就继续并镜,不受 max_cuts 提前掐断 —— 治「快切片每段只有
+      1.6~2.4秒却要按后端下限付 5 秒的钱」。08-09 李时珍片实测:10段×5s=50s 的账
+      对着 30.5s 的片,39% 的钱花在被裁掉的画面上。
+      min_dur=0(默认)时行为与旧版逐字节一致,老片重跑不会变。
+    ★hard_max_cuts = 绝不可越过的镜数天花板(默认=max_cuts)。填满模式必须有这道闸:
+      快切片(本片30.5s里27刀)不设闸会把9个镜头塞进一段,远超即梦"内部硬切5崩"的红线、
+      也超出 h3 已验证的3刀。够不到 min_dur 的段就认了那笔下限钱,别拿崩片去省。"""
+    hard = hard_max_cuts or max_cuts
     segs, cur = [], []
     for s in shots:
         if not cur:
             cur = [s]; continue
         dur = s["end"] - cur[0]["start"]
-        if dur > MAX_DUR or len(cur) >= MAX_CUTS:
+        span = cur[-1]["end"] - cur[0]["start"]
+        if dur > MAX_DUR or len(cur) >= hard or (len(cur) >= max_cuts and span >= min_dur):
             segs.append(cur); cur = [s]
         else:
             cur.append(s)
     if cur:
         segs.append(cur)
+    # 收尾:末段不足 min_dur 时并回上一段(并回后不得超 MAX_DUR)
+    if min_dur and len(segs) >= 2:
+        last = segs[-1]
+        if last[-1]["end"] - last[0]["start"] < min_dur and \
+           len(segs[-2]) + len(last) <= hard and \
+           last[-1]["end"] - segs[-2][0]["start"] <= MAX_DUR:
+            segs[-2].extend(segs.pop())
     return segs
 
 
@@ -89,7 +107,7 @@ def _host_on_camera(s):
 
 
 def seg_role(shots):
-    """段的主导类型:有人说话→口播; 否则看 product_role 多数"""
+    """段的主导类型:有人【出镜】说话→口播; 否则看 product_role 多数"""
     if any((s.get("dialogue") or "").strip() and _host_on_camera(s) for s in shots):
         return "kou"
     roles = [s.get("product_role", "") for s in shots]
@@ -97,7 +115,14 @@ def seg_role(shots):
         return "hero"
     if any(r == "package_text" for r in roles):
         return "package"
-    return "kou" if any((s.get("dialogue") or "").strip() for s in shots) else "dynamic"
+    # ★「有台词即口播」这条兜底只对【旧 shotlist(无 host_on_camera 布尔字段)】开放——
+    #   那时"有台词"是判口播的唯一线索。新 shotlist 显式 host_on_camera=false 的段
+    #   = 画外音空镜/吃播/菜品,哪怕有台词也不是口播;误判进 mm 会拿产品镜去对口型,
+    #   钩子直接丢(2026-08-07 参阿婆片 S2 吃播段实翻车,当时靠人工改回 i2v)。
+    legacy = all(not isinstance(s.get("host_on_camera"), bool) for s in shots)
+    if legacy and any((s.get("dialogue") or "").strip() for s in shots):
+        return "kou"
+    return "dynamic"
 
 
 # 产品/包装形态词 → products 键 的同义映射(反推文本里的说法可能和素材键不同)。
@@ -222,7 +247,7 @@ def completeness_check(prompt, shots, verbs=None):
     return warns
 
 
-def plan(shotlist_path, assets_path, out_path):
+def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0, hard_max_cuts=None):
     sl = json.load(open(shotlist_path))
     cfg = json.load(open(assets_path))
     host = cfg.get("host_anchor", "")
@@ -232,13 +257,13 @@ def plan(shotlist_path, assets_path, out_path):
     form_map = merged_form_map(cfg)
     verbs = PRODUCT_VERBS + [v for v in (cfg.get("product_verbs") or []) if v not in PRODUCT_VERBS]
     shots = split_long_shots(sl["shots"])       # 修1: 先拆超长单镜
-    groups = group_shots(shots)
+    groups = group_shots(shots, max_cuts, min_dur, hard_max_cuts)
 
     segments, md = [], [f"# 生成方案 ({len(groups)}段)\n", f"产品: {prod_desc}\n"]
     for gi, shots in enumerate(groups, 1):
         role = seg_role(shots)
         start, end = shots[0]["start"], shots[-1]["end"]
-        dur = max(4, min(15, math.ceil(end - start)))
+        dur = max(min_dur or 4, min(15, math.ceil(end - start)))
         sid = f"S{gi}"
         warns = []
         if role == "kou":
@@ -298,6 +323,14 @@ if __name__ == "__main__":
     ap.add_argument("shotlist")
     ap.add_argument("assets")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--min-dur", type=float, default=0,
+                    help="后端最短生成时长(即梦4/海螺h3 5)。>0 开启填满模式:段跨度不够就继续并镜,"
+                         "别让快切片每段只有2秒却按下限付5秒的钱。默认0=旧行为不变")
+    ap.add_argument("--max-cuts", type=int, default=MAX_CUTS,
+                    help="单段最多几个镜头(即梦内部硬切≤3,5崩;海螺h3已验3刀OK,更多未验)")
+    ap.add_argument("--hard-max-cuts", type=int, default=None,
+                    help="填满模式下的镜数天花板,绝不越过(默认=--max-cuts)。即梦内部硬切5崩,"
+                         "h3已验3刀;快切片开填满时必须设,否则会把9个镜头塞进一段")
     a = ap.parse_args()
     out = a.out or os.path.join(os.path.dirname(a.shotlist), "segments.json")
-    plan(a.shotlist, a.assets, out)
+    plan(a.shotlist, a.assets, out, a.max_cuts, a.min_dur, a.hard_max_cuts)

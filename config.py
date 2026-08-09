@@ -45,6 +45,30 @@ def xyq_key():
         "未找到小云雀 key。请 `export XYQ_ACCESS_KEY=...` 或写入 ~/.config/daihuo-fanpai/xyq_key")
 
 
+def rh_key():
+    """RunningHub(海螺h3/seedream4.5)API key,32位。读取优先级同 ark_key。
+    ⚠钱包计费(约¥0.48/秒),不是免费池——调用前确认用户已同意花钱。"""
+    k = os.environ.get("RUNNINGHUB_API_KEY")
+    if k and k.strip():
+        return k.strip()
+    p = os.path.expanduser("~/.config/daihuo-fanpai/rh_key")
+    if os.path.exists(p):
+        return open(p).read().strip()
+    raise RuntimeError(
+        "未找到 RunningHub key。请 `export RUNNINGHUB_API_KEY=...` 或写入 ~/.config/daihuo-fanpai/rh_key")
+
+
+def rh_key_status():
+    """给 doctor 用:返回 (ok, 说明),不抛异常。"""
+    try:
+        k = rh_key()
+        src = "环境变量 RUNNINGHUB_API_KEY" if os.environ.get("RUNNINGHUB_API_KEY") else "配置文件"
+        return (len(k) == 32, f"就位({src},{len(k)}字节)" if len(k) == 32
+                else f"长度异常({len(k)}字节,RH key 应为32位)")
+    except Exception as e:
+        return (False, str(e))
+
+
 def kimi_key():
     """Kimi(Moonshot)API key,K3 双反推腿用。读取优先级同 ark_key。"""
     k = os.environ.get("KIMI_API_KEY") or os.environ.get("MOONSHOT_API_KEY")

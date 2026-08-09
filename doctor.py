@@ -91,6 +91,26 @@ def check_xyq():
     return OK, f"CLI + key {msg},认证探针通过"
 
 
+def check_rh():
+    # RunningHub(海螺h3):第四条生成腿,★唯一的口播mm备腿。可选 → 缺失只 WARN 不挡开工
+    import config
+    ok, msg = config.rh_key_status()
+    if not ok:
+        return WARN, f"key 未配(可选付费腿) → {msg}"
+    # 认证探针:query 一个不存在的 taskId,不提交任务不扣费
+    try:
+        import requests
+        r = requests.post("https://www.runninghub.cn/openapi/v2/query",
+                          headers={"Authorization": f"Bearer {config.rh_key()}",
+                                   "Content-Type": "application/json"},
+                          json={"taskId": "0"}, proxies={"http": None, "https": None}, timeout=20)
+        if r.status_code in (401, 403):
+            return WARN, "key 无效(HTTP %d) → 到 runninghub.cn 重新获取企业级共享key" % r.status_code
+    except Exception:
+        return WARN, f"key {msg},但探针网络失败(可稍后重试)"
+    return OK, f"key {msg},认证探针通过 ⚠钱包计费≈¥0.48/秒,花钱前须用户点头"
+
+
 def check_cosyvoice():
     from config import COSYVOICE_HOME
     py = f"{COSYVOICE_HOME}/.venv/bin/python"
@@ -141,6 +161,7 @@ def main():
               ("Seed2.1Pro key(反推)", check_ark),
               ("Kimi K3(双反推腿,可选)", check_kimi),
               ("小云雀(生成备腿,可选)", check_xyq),
+              ("RunningHub海螺(付费腿,可选)", check_rh),
               ("CosyVoice(配音)", check_cosyvoice),
               ("Seed-VC(换声,可选)", check_seedvc),
               ("剪映草稿交付", check_jianying), ("代理", check_proxy)]
