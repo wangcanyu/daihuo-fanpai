@@ -37,21 +37,30 @@ IP_PAT = re.compile(r"《[^》]{1,20}》")
 #   → 提示词一边说"必须与@图片1完全一致"一边说"她穿吊带",自相矛盾,模型必漂
 #   (07-22 七子白量产时只能整片手工统一穿着)。规则:服装由 host_desc + 锚图统一治理,
 #   逐镜的纯着装描述一律剔除;顺带也躲开了即梦 TNS 的吊带/抹胸类敏感词。
-CLOTH = ("吊带", "背心", "T恤", "上衣", "睡衣", "衬衫", "外套", "连衣裙", "家居服",
-         "蕾丝", "荷叶边", "发箍", "浴巾", "浴袍", "毛衣", "卫衣", "围裙")
+CLOTH = ("吊带", "背心", "T恤", "上衣", "睡衣", "睡裙", "睡袍", "浴裙", "衬衫", "外套", "连衣裙", "家居服",
+         "蕾丝", "荷叶边", "发箍", "发夹", "浴巾", "浴袍", "浴帽", "浴衣", "内搭", "内衣",
+         "毛衣", "卫衣", "围裙", "缎面", "系带裙", "浴帽", "头巾")
 _OUTFIT_ONLY = re.compile(r"^(同一)?(位)?(主播|她|女性|男性|人物)?\s*(换穿|身穿|穿着|穿|戴着|戴)")
+# 长句里嵌着的换装片段(如"洗后效果:主播换穿粉色缎面睡裙配白色蕾丝内搭,发侧别浅色发夹")——
+# 整条丢会连动作一起丢,所以只切掉"(主播)换穿/身穿/裹着…"到下一个标点为止的那一截
+# 动词要穷举:实际语料里出现过 换穿/身穿/穿着/穿/身着/换装为/换装/裹着/裹/披着/披/戴着/戴
+_OUTFIT_FRAG = re.compile(r"(主播|她|人物)?(换装为|换装|换穿|身穿|身着|穿着|穿|裹着|裹|披着|披|戴着|戴)"
+                          r"[^,,。;;、]*(?:" + "|".join(CLOTH) + r")[^,,。;;、]*")
 
 
 def _strip_outfit(action):
     """剔掉逐镜着装描述:①括号内的着装注(保住括号外的动作) ②纯着装从句"""
     action = re.sub(r"[((][^))]*(?:" + "|".join(CLOTH) + r")[^))]*[))]", "", action or "")
+    action = _OUTFIT_FRAG.sub("", action)          # ★长句里嵌的换装片段
     keep = []
     for c in [x.strip() for x in re.split(r"([,,;;])", action) if x.strip()]:
         if c in ",,;;":
             continue
         if any(w in c for w in CLOTH) and (_OUTFIT_ONLY.match(c) or len(c) <= 14):
             continue
-        keep.append(c)
+        c = c.strip(" ::、")
+        if len(c) >= 3:                 # 剥完只剩"洗后效果:"这类残桩,丢掉
+            keep.append(c)
     return ", ".join(keep)
 # 提交前值得人看一眼的敏感/易拒词(★只报警不自动改——08-09 教训:预防性消毒过度会把
 # 道具改走形,而 RH 失败不计费,应先试忠实版再降级)
@@ -113,8 +122,7 @@ def translate(items):
                 txt += ev.get("delta", "")
         return json.loads(txt[txt.find("{"):txt.rfind("}") + 1])
     except Exception as e:
-        print(f"[h3][翻译失败,退回中文占位] {type(e).__name__}: {str(e)[:120]}", file=sys.stderr)
-        return {}
+        raise RuntimeError(f"{type(e).__name__}: {str(e)[:160]}")
 
 
 def build(seg, shots, cfg, en):
@@ -129,7 +137,9 @@ def build(seg, shots, cfg, en):
     # ★i2v 段 plan 只落一张 anchor(即梦 image2video 就吃一张),但 h3 能吃 9 张 —— 
     #   这里按该段文本重新匹配【所有】出现的产品形态挂全,别浪费(蕾蕾片 S1 一段里
     #   同时要油背+皂体+纸盒,只挂一张必然让模型自由发挥另外两样)。
-    if seg["type"] != "mm":
+    # ★判据看"标签够不够"而不是看 type:灌完 h3 提示词后 type 会被改成 mm,
+    #   再跑一次就走不进这个分支、anchor_labels 只剩一个 → 多锚图白挂(08-09 自伤)
+    if len(labels) < len(imgs) or not labels:
         try:
             from plan_segments import pick_product_anchors, merged_form_map
             got, _miss = pick_product_anchors(shots, cfg.get("products", {}), merged_form_map(cfg))
@@ -152,10 +162,18 @@ def build(seg, shots, cfg, en):
     prod_imgs = imgs[1:] if has_host else imgs
     for i, path in enumerate(prod_imgs):
         label = labels[i] if i < len(labels) else "product"
-        defs.append(f"<Subject {sid}> is the {E(label) or label} of the product, defined by "
-                    f"<Picture {n}>: {E(prod_desc) or prod_desc}. Its shape, colour, texture and "
-                    f"every printed character must stay identical to <Picture {n}>; "
-                    f"do not redraw, restyle or invent any text on it.")
+        # ★逐形态描述:assets.json 的 form_desc 优先。不是所有锚图都是"产品"——
+        #   蕾蕾片的"油背"是人的背(画布),套 product_desc 会写出
+        #   "<Subject 2> is the 油背 of the product: 李时珍洁面皂…" 这种自相矛盾的定义。
+        fdesc = (cfg.get("form_desc") or {}).get(label)
+        if fdesc:
+            defs.append(f"<Subject {sid}> is defined by <Picture {n}>: {E(fdesc) or fdesc}. "
+                        f"Keep it identical to <Picture {n}>.")
+        else:
+            defs.append(f"<Subject {sid}> is the {E(label) or label} of the product, defined by "
+                        f"<Picture {n}>: {E(prod_desc) or prod_desc}. Its shape, colour, texture and "
+                        f"every printed character must stay identical to <Picture {n}>; "
+                        f"do not redraw, restyle or invent any text on it.")
         subj_ids[label] = sid
         pics.append(path); sid += 1; n += 1
     env = shots[0].get("scene", "")
@@ -261,10 +279,30 @@ def main():
             act = _strip_onscreen(s.get("action", ""))
             if act:
                 pool.add(act)
+    pool |= set((cfg.get("form_desc") or {}).values())
     pool |= {cfg.get("host_desc", ""), cfg.get("product_desc", "")} | set(
         l for seg in segs for l in (seg.get("anchor_labels") or []))
     pool = {x for x in pool if x}
-    en = {} if a.no_translate else translate({x: "" for x in sorted(pool)})
+    # ★翻译失败必须响亮 + 阻断:h3 要英文正文,中文提示词是残次品,静默放行等于
+    #   把废稿喂给收费 API(08-09 蕾蕾片 ConnectTimeout 后照样提交,靠审查拦下才没白花钱)。
+    #   想要中文占位只有一条合法路径:显式 --no-translate。
+    en = {}
+    if not a.no_translate:
+        last = None
+        for attempt in range(3):
+            try:
+                en = translate({x: "" for x in sorted(pool)})
+                break
+            except Exception as e:
+                last = e
+                print(f"[h3] 翻译第{attempt+1}次失败: {e}", file=sys.stderr)
+                import time as _t; _t.sleep(5 * (attempt + 1))
+        if not en:
+            sys.exit(f"[h3][中止] 翻译三次均失败({last})。h3 要英文正文,中文提示词是残次品,"
+                     f"不能提交。请检查网络/ARK_API_KEY 后重跑;确实要中文占位请显式加 --no-translate")
+        miss = [x for x in pool if x not in en]
+        if miss:
+            print(f"[h3][⚠] {len(miss)} 条未译回,将保留中文: {miss[:3]}", file=sys.stderr)
     print(f"[h3] 待译短语 {len(pool)} 条,译回 {len(en)} 条"
           f"{'(--no-translate,全部保留中文)' if a.no_translate else ''}")
 
