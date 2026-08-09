@@ -25,13 +25,41 @@ detailed_description / overall_soundscape / non_diegetic_music),正文英文、
 """
 import argparse, json, os, re, sys
 
-# 屏上贴字/花字类指令:必须剔出提示词(那是剪映的活;07-24 实证会泄漏进画面)
-ONSCREEN_PAT = re.compile(r"(弹出|浮现|出现|显示)?[^,,。;;]*?"
-                          r"(花字|贴字|字幕|标注|字样弹|文字条|角标)[^,,。;;]*")
+# 屏上贴字/花字/后期特效类指令:必须剔出提示词(那是剪映的活;07-24 实证会泄漏进画面)
+# ★不止文字类:"画面叠加虚线圆圈""箭头指向""高亮"这些也是后期加的,让模型画会画进实拍层
+POST_WORDS = ("花字", "贴字", "字幕", "标注", "字样弹", "文字条", "角标",
+              "叠加", "圈住", "虚线圆", "箭头", "高亮", "特效", "转场", "贴纸")
+ONSCREEN_PAT = re.compile(r"(弹出|浮现|出现|显示|画面)?[^,,。;;]*?"
+                          r"(" + "|".join(POST_WORDS) + r")[^,,。;;]*")
+# 第三方 IP / 品牌:一律不进提示词(《》书名号通常就是IP名)。无法穷举 → 只报警交人处理
+IP_PAT = re.compile(r"《[^》]{1,20}》")
+# ★服装统一:多日打卡 vlog 的分镜表会逐镜写"换穿白色蕾丝吊带"这类描述,而主播锚图只有一套衣服
+#   → 提示词一边说"必须与@图片1完全一致"一边说"她穿吊带",自相矛盾,模型必漂
+#   (07-22 七子白量产时只能整片手工统一穿着)。规则:服装由 host_desc + 锚图统一治理,
+#   逐镜的纯着装描述一律剔除;顺带也躲开了即梦 TNS 的吊带/抹胸类敏感词。
+CLOTH = ("吊带", "背心", "T恤", "上衣", "睡衣", "衬衫", "外套", "连衣裙", "家居服",
+         "蕾丝", "荷叶边", "发箍", "浴巾", "浴袍", "毛衣", "卫衣", "围裙")
+_OUTFIT_ONLY = re.compile(r"^(同一)?(位)?(主播|她|女性|男性|人物)?\s*(换穿|身穿|穿着|穿|戴着|戴)")
+
+
+def _strip_outfit(action):
+    """剔掉逐镜着装描述:①括号内的着装注(保住括号外的动作) ②纯着装从句"""
+    action = re.sub(r"[((][^))]*(?:" + "|".join(CLOTH) + r")[^))]*[))]", "", action or "")
+    keep = []
+    for c in [x.strip() for x in re.split(r"([,,;;])", action) if x.strip()]:
+        if c in ",,;;":
+            continue
+        if any(w in c for w in CLOTH) and (_OUTFIT_ONLY.match(c) or len(c) <= 14):
+            continue
+        keep.append(c)
+    return ", ".join(keep)
 # 提交前值得人看一眼的敏感/易拒词(★只报警不自动改——08-09 教训:预防性消毒过度会把
 # 道具改走形,而 RH 失败不计费,应先试忠实版再降级)
-RISKY = ["针管", "注射", "针头", "药", "疗效", "医美", "刀", "血",
+RISKY = ["针管", "注射", "针头", "疗效", "医美", "血",
          "吊带", "抹胸", "浴裙", "裸露", "腋下", "内衣"]
+# 译英后同义的易拒词(译文里才出现,扫中文原文抓不到)
+RISKY_EN = ["syringe", "needle", "injection", "naked", "nude", "topless",
+            "camisole", "lingerie", "blood", "wound"]
 
 
 def _fmt_ts(sec):
@@ -44,8 +72,8 @@ def _strip_onscreen(action):
     """剔掉贴字/花字类从句,保留纯动作"""
     keep = [c.strip() for c in re.split(r"[,,;;。]", action or "") if c.strip()]
     keep = [c for c in keep if not ONSCREEN_PAT.fullmatch(c) and
-            not any(w in c for w in ("花字", "贴字", "字幕", "标注"))]
-    return ", ".join(keep)
+            not any(w in c for w in POST_WORDS)]
+    return _strip_outfit(", ".join(keep))
 
 
 def translate(items):
@@ -98,6 +126,18 @@ def build(seg, shots, cfg, en):
     prod_desc = cfg.get("product_desc", "产品")
     labels = seg.get("anchor_labels") or []
     imgs = seg.get("images") or ([seg["anchor"]] if seg.get("anchor") else [])
+    # ★i2v 段 plan 只落一张 anchor(即梦 image2video 就吃一张),但 h3 能吃 9 张 —— 
+    #   这里按该段文本重新匹配【所有】出现的产品形态挂全,别浪费(蕾蕾片 S1 一段里
+    #   同时要油背+皂体+纸盒,只挂一张必然让模型自由发挥另外两样)。
+    if seg["type"] != "mm":
+        try:
+            from plan_segments import pick_product_anchors, merged_form_map
+            got, _miss = pick_product_anchors(shots, cfg.get("products", {}), merged_form_map(cfg))
+            if got:
+                labels = [l for l, _ in got]
+                imgs = [pth for _, pth in got]
+        except Exception:
+            pass
     has_host = bool(cfg.get("host_anchor")) and seg["type"] == "mm"
     # Picture 编号:mm 段 @图片1=主播,其后是各产品形态;i2v 段只有产品
     pics, defs, subj_ids = [], [], {}
@@ -234,8 +274,13 @@ def main():
         txt, pics = build(seg, shots, cfg, en)
         open(os.path.join(a.out_dir, f"{seg['seg']}_h3.txt"), "w").write(txt)
         manifest[seg["seg"]] = pics
-        hit = [w for w in RISKY if any(w in (s.get("action", "") + s.get("subject", ""))
-                                       for s in shots)]
+        # ★扫【产物】不扫原始分镜表:着装/贴字/IP 已在上面剥离,扫原文会满屏假警报,
+        #   而假警报会让人对真警报脱敏(08-09 首版实犯)。中英都扫。
+        blob = txt + "".join((s.get("action", "") or "") + (s.get("scene", "") or "")
+                             for s in shots if False)
+        hit = [w for w in RISKY if w in blob]
+        hit += [w for w in RISKY_EN if re.search(rf"\b{w}\b", blob, re.I)]
+        hit += [f"第三方IP {m}" for m in set(IP_PAT.findall(blob))]
         if hit:
             warns.append((seg["seg"], hit))
         if (seg.get("dialogue") or "").strip() and "台词" in txt:
