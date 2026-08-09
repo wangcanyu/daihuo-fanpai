@@ -67,6 +67,7 @@ def _strip_outfit(action):
 RISKY = ["针管", "注射", "针头", "疗效", "医美", "血",
          "吊带", "抹胸", "浴裙", "裸露", "腋下", "内衣"]
 # 译英后同义的易拒词(译文里才出现,扫中文原文抓不到)
+_WARN_FORMDESC = set()
 RISKY_EN = ["syringe", "needle", "injection", "naked", "nude", "topless",
             "camisole", "lingerie", "blood", "wound"]
 
@@ -150,7 +151,7 @@ def build(seg, shots, cfg, en):
             pass
     has_host = bool(cfg.get("host_anchor")) and seg["type"] == "mm"
     # Picture 编号:mm 段 @图片1=主播,其后是各产品形态;i2v 段只有产品
-    pics, defs, subj_ids = [], [], {}
+    pics, defs, subj_ids, need_fd = [], [], {}, []
     n = 1
     if has_host:
         pics.append(cfg["host_anchor"])
@@ -168,12 +169,22 @@ def build(seg, shots, cfg, en):
         fdesc = (cfg.get("form_desc") or {}).get(label)
         if fdesc:
             defs.append(f"<Subject {sid}> is defined by <Picture {n}>: {E(fdesc) or fdesc}. "
-                        f"Keep it identical to <Picture {n}>.")
+                        f"Reproduce exactly what is visible in <Picture {n}> and nothing else; "
+                        f"do not add any packaging, box, container or accessory that is not "
+                        f"visible in <Picture {n}>.")
         else:
-            defs.append(f"<Subject {sid}> is the {E(label) or label} of the product, defined by "
-                        f"<Picture {n}>: {E(prod_desc) or prod_desc}. Its shape, colour, texture and "
-                        f"every printed character must stay identical to <Picture {n}>; "
-                        f"do not redraw, restyle or invent any text on it.")
+            # ★绝不把 product_desc 整句贴上来:它常常一句话同时描述多个形态
+            #   ("三角皂体…米粉色三棱锥纸盒印有李时珍logo…"),而这张图里只有其中一个。
+            #   贴上去=主动指使模型去画一个它没有参考的东西 → 它只能瞎编
+            #   (08-09 美吉吉2 实翻车:6个段凭空多出一个方盒子,文字图案全错)。
+            #   缺 form_desc 时只描述"这张图里可见的",并显式禁止添加图外之物。
+            defs.append(f"<Subject {sid}> is the product form shown in <Picture {n}>"
+                        f"{' (' + (E(label) or label) + ')' if label and label != 'product' else ''}. "
+                        f"Reproduce exactly what is visible in <Picture {n}>: its shape, colour, "
+                        f"texture and every printed character. Do not restyle or invent any text on it, "
+                        f"and do not add any packaging, box, container or accessory that is not "
+                        f"visible in <Picture {n}>.")
+            need_fd.append(label)
         subj_ids[label] = sid
         pics.append(path); sid += 1; n += 1
     env = shots[0].get("scene", "")
@@ -186,6 +197,8 @@ def build(seg, shots, cfg, en):
         defs.append("There is exactly one person on screen from beginning to end, <Subject 1>. "
                     "No other person, hand or body part belonging to anyone else may appear.")
 
+    if need_fd:
+        _WARN_FORMDESC.update(need_fd)
     speaking = bool((seg.get("dialogue") or "").strip())
     say = ("She is speaking to the camera; her lip movement follows <Audio 1> precisely, "
            "with natural jaw and cheek motion." if speaking else
@@ -331,6 +344,11 @@ def main():
         print(f"  {seg['seg']:4} {len(seg['shots'])}镜 {seg['duration']}s "
               f"锚图{len(manifest[seg['seg']])}张 "
               f"{'有台词(口型跟音频)' if (seg.get('dialogue') or '').strip() else '无台词(口型闭合)'}")
+    if _WARN_FORMDESC:
+        print(f"\n[h3][建议] 这些形态没写 form_desc,已退回'只画这张图里可见的东西'的保守描述:"
+              f" {sorted(_WARN_FORMDESC)}\n  → 在 assets.json 加 form_desc: {{\"形态键\": \"这张图里到底是什么\"}} 会更准。"
+              f"\n  ★千万别指望 product_desc 顶替:它常一句话描述多个形态,贴到单形态锚图上"
+              f"会指使模型去画图里没有的东西(08-09 美吉吉2 凭空多出方盒子)。")
     if warns:
         print("\n[h3][⚠人审] 以下段含敏感/易拒词,**不自动改**——先按原样试(RH失败不计费),"
               "被拒再消毒;别预防性改写导致道具走形(08-09 教训):")
