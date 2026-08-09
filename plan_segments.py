@@ -110,6 +110,12 @@ def seg_role(shots):
     """段的主导类型:有人【出镜】说话→口播; 否则看 product_role 多数"""
     if any((s.get("dialogue") or "").strip() and _host_on_camera(s) for s in shots):
         return "kou"
+    # ★无台词的人物镜也必须走 mm(拿得到主播锚图),不能掉进 i2v 产品质感模板——
+    #   旁白型片子(全片无台词)整段都是人物表演,误路由等于把钩子和人一起丢掉
+    #   (07-24 七子白量产实证,当时只能整片手构 segments 绕开)。
+    #   只认【显式 True】:旧 shotlist 没这个字段,行为不变。
+    if any(s.get("host_on_camera") is True for s in shots):
+        return "kou"
     roles = [s.get("product_role", "") for s in shots]
     if any(r == "hero_real" for r in roles):
         return "hero"
