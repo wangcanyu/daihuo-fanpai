@@ -52,10 +52,11 @@
 | `localize_seed.py` | B模式脚本本地化初稿(喂方法论弹药包起草) |
 | `localize_apply.py` | 把改好的台词写回分镜表(自动同步口播提示词保口型) |
 | `tts_segments.py` | 配音:CosyVoice 多说话人 A/B + 多音字读音修正(可配置词表) |
-| `gen_segments.py` | 生成:即梦/火山/小云雀三后端;口播时长自动对齐配音;**提交退避重试+下载解码体检**(坏字节流自动重下) |
-| `ark_gen.py` | 火山 Ark Seedance 2.0 后端(按 token 计费,省 CLI 积分池) |
+| `gen_segments.py` | 生成:即梦/火山/小云雀/海螺四后端(`--i2v-backend` 切 i2v 段、`--mm-backend` 切口播段);**即梦默认走非 VIP 慢速排队档**(比 VIP 便宜 43%,`--jimeng-model` 可切快速档/2.5);口播时长自动对齐配音;**提交退避重试+下载解码体检**(坏字节流自动重下) |
+| `ark_gen.py` | 火山 Ark Seedance 2.0 后端(按 token 计费,省 CLI 积分池;含人脸参考图会被政策拦截,只走纯产品 i2v) |
 | `xyq_gen.py` | 小云雀后端(独立 credits 池;参考重绘语义,只接无文字要求的氛围镜) |
-| `assemble.py` | 逐段归一化拼接 + 铺连续配音轨 |
+| `rh_gen.py` | RunningHub 海螺 h3 后端(钱包 ≈¥0.48/秒;**唯一的口播 mm 备腿**,audioUrls 驱动口型;另含 seedream4.5 文生图)。用前读 `references/h3/README.md` |
+| `assemble.py` | 逐段归一化拼接 + 铺连续配音轨;`--trim-to-plan` 裁回规划跨度治段尾空窗,`--master-audio` A模式整条原音直铺 |
 | `judge.py` | 评委:三看漏斗 90 分打分;`--target` 时**成片+原片一起上传做真保真度对比** |
 | `export_subs.py` | 导出句级 SRT 字幕 + 原片屏上贴字清单(剪映照抄) |
 | `vc_segments.py` | **换声不换演**(Seed-VC):原片切段音频转目标音色,表演节奏逐帧保留;治"复用原音怕查重/TTS重配丢表演"两难(单主播片;群戏需说话人分离未实现) |

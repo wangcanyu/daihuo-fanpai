@@ -113,7 +113,7 @@ def _ensure_jy():
 
 
 def deliver_draft(segs, clips_dir, audio_dir, timing, drafts_dir, name,
-                  shotlist_path=None, replace=False):
+                  shotlist_path=None, replace=False, trim_to_plan=False, size="720x1280"):
     _ensure_jy()
     import pyJianYingDraft as jy
     from pyJianYingDraft import TrackSpec, TrackType
@@ -122,7 +122,8 @@ def deliver_draft(segs, clips_dir, audio_dir, timing, drafts_dir, name,
     if not os.path.isdir(drafts_wsl):
         sys.exit(f"[deliver] 草稿目录不存在: {drafts_dir}")
     folder = jy.DraftFolder(drafts_wsl)
-    script = folder.create_draft(name, 720, 1280, allow_replace=replace)
+    _w, _h = (int(x) for x in size.lower().split("x"))
+    script = folder.create_draft(name, _w, _h, allow_replace=replace)
     draft_dir = os.path.join(drafts_wsl, name)
     mat_dir = os.path.join(draft_dir, "materials")
     os.makedirs(mat_dir, exist_ok=True)
@@ -141,17 +142,26 @@ def deliver_draft(segs, clips_dir, audio_dir, timing, drafts_dir, name,
         clip = os.path.join(mat_dir, f"{nm}.mp4")
         shutil.copy(src, clip)
         mat = jy.VideoMaterial(clip)
-        script.add_segment(jy.VideoSegment(mat, jy.Timerange(t_us, mat.duration)), "主视频")
+        # ★与 assemble --trim-to-plan 对齐:各后端产物都比规划跨度长(即梦下限4s/海螺5s),
+        #   不裁则视频轨被撑长、而字幕轨是按原片时间轴排的 → 两轨对不上(08-09 李时珍片:
+        #   草稿51.7s vs 成片30.4s)。裁法用 source_timerange 只取段首那一截,不动素材。
+        use_us = mat.duration
+        if trim_to_plan:
+            span_us = int((float(s.get("end", 0)) - float(s.get("start", 0))) * 1e6)
+            if 0 < span_us < use_us:
+                use_us = span_us
+        script.add_segment(jy.VideoSegment(mat, jy.Timerange(t_us, use_us),
+                                           source_timerange=jy.Timerange(0, use_us)), "主视频")
         wav_src = os.path.join(audio_dir, f"{nm}.wav") if audio_dir else ""
         if wav_src and os.path.exists(wav_src):
             wav = os.path.join(mat_dir, f"{nm}.wav")
             shutil.copy(wav_src, wav)
             amat = jy.AudioMaterial(wav)
-            ad = min(amat.duration, mat.duration)  # 配音超长截到段尾(与assemble口径一致)
+            ad = min(amat.duration, use_us)         # 配音超长截到段尾(与assemble口径一致)
             script.add_segment(jy.AudioSegment(
                 amat, jy.Timerange(t_us, ad), source_timerange=jy.Timerange(0, ad)), "配音")
-        seg_starts[nm] = (t_us / 1e6, mat.duration / 1e6)
-        t_us += mat.duration
+        seg_starts[nm] = (t_us / 1e6, use_us / 1e6)
+        t_us += use_us
     if missing:
         print(f"[deliver][缺片] {missing} — 跳过,时间线会短")
 
@@ -238,6 +248,10 @@ if __name__ == "__main__":
                     help=r'剪映草稿根目录,如 "D:\jianying\JianyingPro Drafts"(或设 DAIHUO_JY_DRAFTS)')
     ap.add_argument("--name", default=None, help="草稿名,默认=run目录名")
     ap.add_argument("--replace", action="store_true", help="同名草稿覆盖(默认报错防误删)")
+    ap.add_argument("--trim-to-plan", action="store_true",
+                    help="视频轨每段裁回 segments.json 的 end-start 跨度(口径同 assemble)。"
+                         "★后端有最短时长下限(即梦4s/海螺h3 5s)时必开,否则视频轨比字幕轨长、两轨对不上")
+    ap.add_argument("--size", default="720x1280", help="草稿画布,2K素材用 1440x2560")
     # final
     ap.add_argument("--full", default="output/FULL.mp4", help="assemble 产出的成片")
     ap.add_argument("--out", default=None, help="成品输出,默认 <full>_成品.mp4")
@@ -255,6 +269,7 @@ if __name__ == "__main__":
             sys.exit("[deliver] draft 模式需要 --drafts-dir 或环境变量 DAIHUO_JY_DRAFTS")
         name = a.name or os.path.basename(os.path.dirname(os.path.abspath(a.plan))) or "daihuo_fanpai"
         deliver_draft(segs, a.clips, a.audio_dir, timing, a.drafts_dir, name,
+                      trim_to_plan=a.trim_to_plan, size=a.size,
                       shotlist_path=a.shotlist, replace=a.replace)
     if a.mode in ("final", "both"):
         out = a.out or (os.path.splitext(a.full)[0] + "_成品.mp4")
