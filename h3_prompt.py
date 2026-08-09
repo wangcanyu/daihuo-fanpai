@@ -262,6 +262,14 @@ def build(seg, shots, cfg, en):
         "across the whole video. Do not generate any additional narration, voice or speech "
         "beyond <Audio 1>.", "",
         "non_diegetic_music: None. Do not add any background music.", "",
+        # ★A模式换品牌的通用陷阱:分镜表描述的是【原品牌】产品的外观(标签/浮雕/压印/花纹),
+        #   而锚图是【新品牌】的 → 两者在提示词里打架,模型照着文字改产品长相
+        #   (08-09 美吉吉2:"展示皂体光泽面和标签"→皂上印出乱码字;"漩涡浮雕"→三角皂变方皂)。
+        #   猜词表猜不完,改用优先级声明:外观的最终裁决权归锚图。
+        "Product appearance precedence: the products' shape, colour, surface texture, embossing, "
+        "labels and printed text are governed SOLELY by their reference pictures. Wherever a shot "
+        "description above mentions a label, emboss, relief, pattern or wording on a product, "
+        "ignore that detail and render the product exactly as its reference picture shows.", "",
         "Additional constraints: no subtitles, no captions, no on-screen text overlays, "
         "no logo, no watermark anywhere in the frame.",
     ]), pics
@@ -319,6 +327,27 @@ def main():
     print(f"[h3] 待译短语 {len(pool)} 条,译回 {len(en)} 条"
           f"{'(--no-translate,全部保留中文)' if a.no_translate else ''}")
 
+    # ★换品牌前置审计:分镜表描述的是【原品牌】产品的长相,锚图是【新品牌】的,
+    #   两者在提示词里打架 → 模型照着文字改产品(08-09 美吉吉2 打了三次地鼠:
+    #   编方盒子 → 皂上印乱码字 → 三角皂变方皂)。逐段报警是"打到哪补哪",
+    #   这里改成【开跑前一次列全】,一遍改完再生成。
+    APPEAR = ("标签", "压印", "浮雕", "花纹", "字样", "刻字", "商标", "logo", "LOGO",
+              "成分表", "包装上写", "盒面印", "印有")
+    audit = []
+    for sid_, s in sl.items():
+        blob = (s.get("action") or "") + " " + (s.get("product_in_frame") or "")
+        for w in APPEAR:
+            if w in blob:
+                frag = [c for c in re.split(r"[,,;;。]", blob) if w in c]
+                audit.append((sid_, w, (frag[0] if frag else blob)[:60]))
+                break
+    if audit:
+        print(f"\n[h3][★换品牌外观审计] 分镜表有 {len(audit)} 镜在描述【原品牌】产品的长相。"
+              f"提示词已加'外观以锚图为准'的优先级声明兜底,但**最稳的是回 shotlist 改写原文**:")
+        for sid_, w, frag in audit:
+            print(f"    #{sid_} 「{w}」: {frag}")
+        print("    → 删掉或改写成新产品的样子;这一遍在生成【之前】做完,别等看帧才发现。\n")
+
     manifest, warns = {}, []
     for seg in segs:
         shots = [sl[str(x)] for x in seg["shots"]]
@@ -332,6 +361,12 @@ def main():
         hit = [w for w in RISKY if w in blob]
         hit += [w for w in RISKY_EN if re.search(rf"\b{w}\b", blob, re.I)]
         hit += [f"第三方IP {m}" for m in set(IP_PAT.findall(blob))]
+        src = "".join((s.get("action", "") or "") + (s.get("product_in_frame", "") or "")
+                      for s in shots)
+        appear = [w for w in ("标签", "压印", "浮雕", "花纹", "字样", "logo", "商标", "刻字")
+                  if w in src]
+        if appear:
+            hit.append(f"分镜表带原品牌外观词{appear}(已加优先级声明兜底,仍建议改写原文)")
         if hit:
             warns.append((seg["seg"], hit))
         if (seg.get("dialogue") or "").strip() and "台词" in txt:
