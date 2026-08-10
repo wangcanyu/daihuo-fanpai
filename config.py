@@ -69,6 +69,34 @@ def rh_key_status():
         return (False, str(e))
 
 
+def mmh3_key():
+    """MiniMax H3 官方规范后端的 key(秘塔 metaso.cn 的以 mk- 开头)。读取优先级同 ark_key。
+    ⚠钱包计费(秘塔 768P≈¥0.09/秒),不是免费池——调用前确认用户已同意花钱。"""
+    k = os.environ.get("MMH3_API_KEY") or os.environ.get("METASO_API_KEY")
+    if k and k.strip():
+        return k.strip()
+    p = os.path.expanduser("~/.config/daihuo-fanpai/mmh3_key")
+    if os.path.exists(p):
+        return open(p).read().strip()
+    raise RuntimeError(
+        "未找到 MiniMax H3 key。请 `export MMH3_API_KEY=...` 或写入 ~/.config/daihuo-fanpai/mmh3_key")
+
+
+def mmh3_key_status():
+    """给 doctor 用:返回 (ok, 说明),不抛异常。"""
+    try:
+        k = mmh3_key()
+        src = "环境变量" if (os.environ.get("MMH3_API_KEY") or os.environ.get("METASO_API_KEY")) else "配置文件"
+        return (len(k) > 20, f"就位({src},{len(k)}字节)")
+    except Exception as e:
+        return (False, str(e))
+
+
+# MiniMax H3 规范后端的 base_url。★可换渠道:官方 platform.minimaxi.com / 秘塔转售 / 自部署,
+# 只要实现同一套 v1 upload + v2 video_generation 规范即可。默认秘塔(官方价2折)。
+MMH3_BASE_URL = os.environ.get("DAIHUO_MMH3_BASE_URL", "https://metaso.cn/api/minimax")
+
+
 def kimi_key():
     """Kimi(Moonshot)API key,K3 双反推腿用。读取优先级同 ark_key。"""
     k = os.environ.get("KIMI_API_KEY") or os.environ.get("MOONSHOT_API_KEY")
