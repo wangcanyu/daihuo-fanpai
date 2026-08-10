@@ -17,11 +17,14 @@ import argparse, json, os, re, subprocess, time, urllib.request
 
 from config import DOWNLOAD_PROXY
 DREAMINA = os.path.expanduser("~/.local/bin/dreamina")
-# ★即梦档位默认走【非VIP慢速排队】seedance2.0:8积分/秒 vs VIP的14,便宜43%(08-09实测5s=40分)。
-#   代价是真排队(实测十几分钟起),只接非急件批量——等待由 agent 扛,省的是真金白银。
-#   急件/要1080p·4k → --jimeng-model seedance2.0_vip(VIP档才支持720p以上)。
-#   seedance2.5 → 26积分/秒但 duration 上限 30s(2.0是15s),整段长片不必切碎时才划算。
-JIMENG_MODEL = os.environ.get("DAIHUO_JIMENG_MODEL", "seedance2.0")
+# 即梦档位默认 seedance2.0_vip(14积分/秒)。
+# ★非VIP慢速档(seedance2.0,8积分/秒,便宜43%)【已判死,别用】:08-09 一枪 5 秒的任务
+#   排队 15 小时 40 分钟仍是 queue_status=Queueing,且全程占死非VIP并发槽、阻塞后续所有
+#   非VIP提交。省的 43% 换来的是"扔进队列不知何时出片"——任何有交付时间的活都不能走。
+#   想赌可以 --jimeng-model seedance2.0,但先确认槽位没被占。
+# seedance2.5 → 26积分/秒,duration 上限 30s(2.0是15s);强项是物理规律/连续复杂动作,
+#   产品形体准确性 2.0 就够(08-10 四方对照),别为形体准确多花一倍钱。
+JIMENG_MODEL = os.environ.get("DAIHUO_JIMENG_MODEL", "seedance2.0_vip")
 VIP_ONLY_RES = {"1080p", "4k"}
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
@@ -199,9 +202,10 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
               "会拒稿) ②首片请跑 qc_lipsync.py 帧级验收口型 ③钱包计费,确认用户已同意")
     jm = jimeng_model or JIMENG_MODEL
     if not jm.endswith("_vip") and jm != "seedance2.5":
-        print(f"[gen] 即梦档位={jm}(非VIP慢速排队,8积分/秒,便宜43%但要排队十几分钟起)", flush=True)
+        print(f"[gen][⚠] 即梦档位={jm} 是非VIP慢速档 —— 实测排队15小时+仍未出片且占死并发槽,"
+              f"已判死。除非你确认槽位空闲且不赶时间,否则请用 seedance2.0_vip", flush=True)
     else:
-        print(f"[gen] 即梦档位={jm}(快速/高价档)", flush=True)
+        print(f"[gen] 即梦档位={jm}", flush=True)
     # ★并发调度:走替代后端且该后端已验证支持并发 → 线程池;即梦段永远串行(通道限流=1)
     todo = [s for s in segs if not os.path.exists(os.path.join(clips_dir, f"{s['seg']}.mp4"))]
     for s in segs:
@@ -307,9 +311,9 @@ if __name__ == "__main__":
     ap.add_argument("--mm-backend", choices=["jimeng", "rh"], default="jimeng",
                     help="口播段后端: jimeng(CLI积分池,默认) / rh(海螺h3,audioUrls驱动口型;积分耗尽时的付费替代)")
     ap.add_argument("--jimeng-model", default=None,
-                    help=f"即梦档位,默认 {JIMENG_MODEL}(非VIP慢速,8积分/秒)。"
-                         "急件或要1080p/4k用 seedance2.0_vip(14积分/秒);"
-                         "seedance2.5=26积分/秒但时长上限30s")
+                    help=f"即梦档位,默认 {JIMENG_MODEL}(14积分/秒)。"
+                         "★非VIP seedance2.0 虽便宜43%但排队实测15小时+且占死槽位,已判死;"
+                         "seedance2.5=26积分/秒、时长上限30s,只用于物理动作难的镜")
     ap.add_argument("--jimeng-res", default="720p",
                     help="即梦分辨率,默认720p。1080p/4k 仅 seedance2.0_vip 支持")
     ap.add_argument("--concurrency", type=int, default=1,
