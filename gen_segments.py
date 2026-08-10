@@ -15,7 +15,7 @@ gen_segments.py — 生成消费端(吃 plan_segments 的方案 → 串行调即
 """
 import argparse, json, os, re, subprocess, time, urllib.request
 
-from config import DOWNLOAD_PROXY
+from config import DOWNLOAD_PROXY, jimeng_env
 DREAMINA = os.path.expanduser("~/.local/bin/dreamina")
 # 即梦档位默认 seedance2.0_vip(14积分/秒)。
 # ★非VIP慢速档(seedance2.0,8积分/秒,便宜43%)【已判死,别用】:08-09 一枪 5 秒的任务
@@ -77,7 +77,7 @@ def submit(seg, audio_dir, model=None, res="720p"):
     # 提交带退避重试:WSL对即梦偶发瞬时EOF,一枪打空整段就废(07-22实翻车)
     out = ""
     for attempt in range(3):
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(cmd, capture_output=True, text=True, env=jimeng_env())
         out = r.stdout + r.stderr
         m = UUID.search(out)
         if m:
@@ -129,7 +129,7 @@ def wait_download(sid, dst, tries=None, gap=15, model=None):
         tries = 40 if vip else 240
     for _ in range(tries):
         out = subprocess.run([DREAMINA, "query_result", "--submit_id=" + sid],
-                             capture_output=True, text=True).stdout
+                             capture_output=True, text=True, env=jimeng_env()).stdout
         if '"gen_status": "success"' in out or '"gen_status":"success"' in out:
             u = re.search(r'"video_url"\s*:\s*"([^"]+)"', out)
             if u:

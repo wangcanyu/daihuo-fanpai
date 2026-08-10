@@ -134,6 +134,23 @@ def xyq_key_status():
         return (False, str(e))
 
 
+# ★即梦多账号:CLI 原生不支持(只有 login/logout/relogin,单一登录态),但凭证是
+#   ~/.local/share/dreamina/byted_cli_user_token.json 这一个文件,而 CLI **认 HOME**
+#   (实测 XDG_DATA_HOME 无效、HOME 有效)→ 用独立 HOME 目录隔离账号。
+#   并发限制是按账号算的,所以【两个号 = 两条并行的即梦流水线】。
+#   用法:DAIHUO_JIMENG_HOME=~/.config/daihuo-fanpai/jimeng_accounts/b 跑第二个号;
+#        首次要在该 HOME 下单独登录一次:HOME=<该目录> dreamina login --headless
+def jimeng_env():
+    """返回跑 dreamina 时该用的环境(默认真实 HOME;设了 DAIHUO_JIMENG_HOME 则切账号)。"""
+    e = dict(os.environ)
+    h = os.environ.get("DAIHUO_JIMENG_HOME", "").strip()
+    if h:
+        h = os.path.expanduser(h)
+        os.makedirs(h, exist_ok=True)
+        e["HOME"] = h
+    return e
+
+
 COSYVOICE_HOME = os.environ.get("COSYVOICE_HOME", os.path.expanduser("~/CosyVoice"))
 
 # 反推/评委用的 Seed 模型:公共模型名直调(实测可用),不再依赖私人 endpoint ID(ep-xxx)。
