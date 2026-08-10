@@ -14,7 +14,7 @@ updated: 2026-07-13
 
 引擎在本目录(可插拔,换实现只改单个文件):
 `seed_reverse.py` 反推 · `merge_reverse.py` 双反推合并 · `plan_segments.py` 规划 · `h3_prompt.py` 海螺提示词生成 · `cut_audio.py` 原音切段(≥2s闸+timing.json) · `patch_cast.py` 群戏/多人补丁(人数硬约束) · `gen_segments.py` 生成 · `qc_lipsync.py` 帧级口型质检 · `tts_segments.py` 配音 · `assemble.py` 装配 · `deliver.py` 交付(剪映草稿/成品) · `doctor.py` 体检。
-生成后端(可插拔,契约 `submit_*()->tid` / `wait_download(tid,dst)->(size,usage)`):即梦CLI(内置) · `ark_gen.py` 火山 · `xyq_gen.py` 小云雀 · `rh_gen.py` RunningHub海螺h3。
+生成后端(可插拔,契约 `submit_*()->tid` / `wait_download(tid,dst)->(size,usage)`):即梦CLI(内置) · **`mmh3_gen.py` MiniMax H3 官方规范(秘塔渠道,h3 首选)** · `ark_gen.py` 火山 · `xyq_gen.py` 小云雀 · `rh_gen.py` RunningHub海螺h3(同模型贵4.4倍,已退役)。
 
 > **要改造/换引擎/接手本 skill?先读 `DESIGN.md`**(设计理由 + 数据契约 + 扩展点)。参考样例在 `references/`。
 
@@ -99,13 +99,13 @@ python3 <engine>/doctor.py
           `--hard-max-cuts`**(不设闸会把9个镜头塞一段,超即梦"硬切5崩"红线和h3已验的3刀)。
           本片实测:10段50s → 8段42s,浪费39%→28%。默认 --min-dur 0 = 旧行为不变。
         → ★人审 run/segments.md:看分镜卡片 + 完备性关卡的"漏动作"警告,微调提示词/锚图/台词
-2.5 h3提示词(只在走 rh 腿时需要)
+2.5 h3提示词(走 h3 腿时需要:mmh3 或 rh)
         python3 h3_prompt.py run/segments.json --shotlist run/shotlist.json --assets assets.json --out-dir run/prompts
         → plan 出的是【即梦风格中文提示词】,h3 吃不了 → 本步转成官方 Ref2VA 六段式:
           机械部分全自动(切点MM:SS.mmm换算/Picture编号与逐图声明/retention表/人数硬约束/
           ★台词自动剥离/说话或闭嘴指令/贴字指令过滤/每镜钉死环境防参考图带跑背景);
           中文动作用 Ark 一次批量译英(--no-translate 可关,留中文由 agent 润色)。
-        → 敏感词**只报警不自动改**:RH 失败不计费,先按原样试,被拒再消毒
+        → 敏感词**只报警不自动改**:h3 拒稿不计费,先按原样试,被拒再消毒
           (08-09 教训:预防性把"针管"改成"美妆工具柄",道具直接走形,钩子废了)
         → 产物 prompts/<seg>_h3.txt + images.json,人过一遍再喂 gen_segments
 3 配音  python3 tts_segments.py run/segments.json --out-dir run/audio/seg
@@ -123,10 +123,10 @@ python3 <engine>/doctor.py
         → ★**即梦默认档=`seedance2.0` 非VIP慢速排队**(8积分/秒,比VIP便宜43%)。代价是真排队
           (实测18分钟起),轮询预算已自动放到60分钟;超时不代表失败,submit_id 在 meta.json 可补抓。
           急件/要1080p·4k → `--jimeng-model seedance2.0_vip`;长段不想切碎 → `seedance2.5`(26积分/秒,时长上限30s)。
-        → **四条生成腿**:即梦CLI(5500/月积分池,口播主力) | 火山Ark(--i2v-backend ark,按token,★含人脸参考图政策级拦截,只走纯产品i2v) | 小云雀(--i2v-backend xyq,独立credits池) | RunningHub海螺h3(--i2v-backend rh / --mm-backend rh,钱包≈¥0.48/秒)。CLI积分紧张时把i2v卸给Ark/小云雀省池子。
+        → **五条生成腿**:即梦CLI(季卡12320积分/月,产品形体锚定最准) | 火山Ark(--i2v-backend ark,按token,★含人脸参考图政策级拦截,只走纯产品i2v) | 小云雀(--i2v-backend xyq,独立credits池) | RunningHub海螺h3(--i2v-backend rh / --mm-backend rh,钱包≈¥0.48/秒)。CLI积分紧张时把i2v卸给Ark/小云雀省池子。
         → ★**口播mm段有两条腿**:即梦(默认,口型最稳)和海螺h3(--mm-backend rh,audioUrls驱动口型,08-07参阿婆46s片实证)。积分耗尽时口播不再卡死,但要花钱且首用须跑 qc_lipsync 验收。
-        → ★走 rh 腿前先跑 `h3_prompt.py`(下方 2.5 步)出六段式提示词,别拿即梦的中文提示词硬喂
-        → ★用 rh 腿前先读 `references/h3/README.md`:**审查只审prompt文本不审图/音→台词一律不进prompt**、产物多送0.5s尾帧、结果URL只活24h、Ref2VA六段式提示词与 [Shot N] At MM:SS.mmm 段内调度。
+        → ★走 h3 腿(mmh3/rh)前先跑 `h3_prompt.py`(下方 2.5 步)出六段式提示词,别拿即梦的中文提示词硬喂
+        → ★用 h3 腿前先读 `references/h3/README.md`:**审查只审prompt文本不审图/音→台词一律不进prompt**、产物多送0.5s尾帧、结果URL只活24h、Ref2VA六段式提示词与 [Shot N] At MM:SS.mmm 段内调度。
         → ⚠小云雀腿 07-17 实测(mini_lite档):i2v 是**参考重绘语义**非首帧锚定——构图/质感优,但**品牌文字会绘错**且左上角烧死「AI生成」水印→**只接无文字要求的氛围/质感镜**,带包装文字的镜必须即梦。xyq_gen.submit_mm(带--audio口播)仍是实验性。
         → ★用小云雀腿前先读 `references/xyq_notes.md`:与即梦声音范式根本不同(台词/音效写进prompt模型自生语音 vs 即梦wav驱动口型)、prompt黄金公式、实测记录与分工定位。
 5 装配  python3 assemble.py run/segments.json --clips run/clips --audio-dir run/audio/seg --out run/output/FULL.mp4 [--trim-to-plan] [--master-audio 原片.mp4] [--size 1440x2560]
@@ -198,12 +198,12 @@ python3 <engine>/doctor.py
 - **★即梦的并发槽:VIP 与非VIP 各一个,互不占用(08-10 实证)**:提交时序为证——18:27 一条非VIP 排入队列后,19:24 连提 6 条非VIP **全部** `ret=1310`、19:36 换 session 提非VIP 也拒,但 23:5x 提 **seedance2.5(VIP专属)通过**、00:14 再提非VIP 又拒。→ **一个 VIP + 一个非VIP 可以同时在跑**,批量时可以两条流水线并行(但每条内部仍是串行)。
   ⚠️同时暴露慢速档的真实上限:那条非VIP 任务**排到 15 小时 40 分钟仍是 `Queueing`**(过了一整夜),且全程占死非VIP 槽。**"慢速=多等一会"是严重低估,"过夜批量"也是——它是"不知何时"。已判死。**
 - **★即梦的1并发绕不过去,别浪费时间试(08-09 已穷举)**:①换 `--session <另一个会话>` 提交 → 照样 `ret=1310`,**限流是账号/通道级不是会话级**(同档位内)(官方文档说所有生成命令都接受 --session,但它不分配并发槽);②网页版能同时排5条而 CLI 只给1条,原因是**两条不同的 API 通道**——CLI 生成走 `/dreamina/cli/v1/video_generate`,网页走 `/mweb/v1/...`,agent 通道被单独限流。唯一的绕法是用 BrowserSkill 驱动网页版拿槽位,**不建议**(拿稳定 API 换脆弱 UI 自动化)。
-- **★★RH h3 是真并行(08-09 实测,决定批量走哪条腿)**:3 段同时提交**全部接受、无并发限制**,完成于提交后 171/188/212 秒、**完成间隔仅 17-23 秒 = 真并行**(串行会相隔一个生成时长)。768P 实扣 **¥2.40/5秒 = ¥0.48/秒**,与推算吻合。
-  → **8段片墙钟:RH 3路并发≈12分钟 vs 即梦慢速≈8小时**。便宜13%换40倍时间,不划算。
+- **★★h3 是真并行(08-09 在 RH 实测,mmh3 同模型同理)**:3 段同时提交**全部接受、无并发限制**,完成于提交后 171/188/212 秒、**完成间隔仅 17-23 秒 = 真并行**(串行会相隔一个生成时长)。768P 实扣 **¥2.40/5秒 = ¥0.48/秒**,与推算吻合。
+  → **8段片墙钟:h3 3路并发≈12分钟 vs 即梦慢速≈8小时**(慢速档已判死,见上)。
   **但排产要看池子状态,不是看单价**:即梦积分是**预付沉没成本**(季卡付完用不完也过期),
   ① **月池有余额** → 烧即梦,现金支出为零;此时"省"的是池子不是钱——慢速8积分/秒能让12320分产出1540秒素材,VIP 14积分/秒只有880秒,**同样一笔已付的钱多产75%**,愿意等就慢速、赶时间就VIP。
-  ② **月池干了** → 走 RH h3 768P(¥0.48/秒 + 真并发),这才是花现金的时候。
-- **★RH 是渠道价不是模型价**(回执字段就叫 `thirdPartyConsumeMoney`,即转手第三方 API)。**自部署/云端部署 h3 可把 720p 压到约 ¥0.1/秒量级**(用户判断,未验)——上规模后这是终局方案,当前不折腾。三线定位:**即梦慢速=日常量产主力 / H3=池子干了或要2K时的弹性补位 / 自部署=真上规模后的终局**。
+  ② **月池干了** → 走 **mmh3 秘塔 768P(¥0.11/秒 + 真并发)**,这才是花现金的时候;RH 同模型贵 4.4 倍不再用。
+- **★★渠道价 ≠ 模型价(08-10 血证,选型时最容易犯的错)**:我曾据 RunningHub 的 ¥0.48/秒判断"h3 比即梦贵"并据此排产,而 H3 的真实价格是 **¥0.09~0.11/秒,比即梦便宜 7 倍**——差的全是渠道加价(RH 回执字段就叫 `thirdPartyConsumeMoney`,转手第三方 API)。**接任何新后端先问:这是渠道价还是模型价?有没有更靠近源头的通道?** 顺带:原以为要自部署才能到 ¥0.1/秒,结果现成的转售(秘塔)就是这个价,自部署这条路暂时不必折腾。
 - **★★h3 的锚定是"平面印刷图案强、三维形体弱"(08-10 三方对照实证)**:同一天里 h3 把「李时珍」纸盒的 logo/毛笔字/三列小字**零错**锚住(生图模型在同一张盒子上却写出错字);但同样的锚图纪律下,**它把奶黄三角皂画成方形白皂**,而 seedance2.5 用同一张锚图画对了。且这是在提示词矛盾**已清干净**之后——不是提示词问题。
   **四方对照定论(同锚图/同音频/同内容,各抽一次卡)**:h3 768P ¥2.88 → ❌方形白皂;**即梦 seedance2.0_vip ¥4.45 → ✅三角形+橙色大理石纹完美还原,四者中最准**;seedance2.5 ¥8.27 → ✅正确。
   → **不是"2.5 独有优势",是即梦系整体锚得住三维形体,而且 2.0 就够、比 2.5 便宜一半。** 分工:**带包装文字/平面印刷图案的镜给 h3(便宜且零错);"产品本体形状要准"的镜给即梦 2.0;2.5 只留给物理规律/连续复杂动作难的镜**。⚠限制:各腿 n=1、无抽卡方差数据、测试段是 6 秒 4 镜的长段(段内镜头多可能加剧锚定衰减,短段未必)。
@@ -212,13 +212,13 @@ python3 <engine>/doctor.py
 - **★生图模型会改字,视频模型不会(08-09 同素材双向实证)**:同一个「李时珍七子白」纸盒,全能图片PRO(nano-banana-pro)图生图**把logo糊掉、三列小字写成错字**;海螺h3 拿同一张真图当参考图,**logo连®和直角框、毛笔字、三列小字全部零错**。原因=生图是"重绘"、i2v/mm的参考图是"锚定"。**所以"包装文字必须动真图"这条规律不是即梦专属,是 i2v/mm 这一类的共性;而生图模型永远不能用来合成带品牌文字的锚图**(可做构图/氛围/无字锚图)。
 - **★状态参考图会连带迁移它的背景和光照(08-09 李时珍S8实翻车)**:挂了一张深棕影棚背景的"产品泡沫态"图当泡沫锚,产出的特写镜连背景一起变成深棕影棚,与浴室场景断裂(评委也点名"单独泡沫特写是杂镜")。修法=在该镜显式写死环境+把 retention 标成 partially_preserved 并写明"只借质感,不要它的背景和打光",重抽即修好。
 - **judge 压缩小版会看漏(08-09,两条指控全假)**:成片>35MB自动压360p上传后,评委声称"复刻版全程在卫生间、未还原熬夜叙事"(实际卧室夜戏在片子里)、"硬切数远少于原片"(实测原片27刀 vs 成片26刀)。**judge 的差距清单必须逐条帧级/机器核实再采信**,别直接转述给用户。
-- **RunningHub海螺h3(第四条腿,08-07参阿婆46s片实证)**:①**内容安全审查只审 prompt 文本**——台词原文、价格词("大几十")、"内脏"类词写进 prompt 就拒(不计费但白等),**图片和音频不审**;故 mm 段台词一律不进 prompt,口型靠 audioUrls 自带。⚠这和即梦 TNS(审人脸审图)正相反,消毒策略不能互相套用。②结果 URL 只活24小时,拿到即落盘。③轮询 40×12s 对8s段不够(任务其实会 SUCCESS)→ rh_gen 已按段时长放大预算,超时凭 taskId `--fetch` 补抓不重复扣费。④段内多镜的身份保持弱于即梦(护目镜漂成细框眼镜、领夹麦消失),长段优先拆。⑤seedream4.5 文生图总像素须≥3,686,400(9:16 用 1440×2560)——A模式想换掉原片主播长相时,生新锚图比抽原片帧干净且避开肖像问题。⑥口型的实证证据是"产物音轨 vs 输入wav 的 RMS 包络相关0.976",**这只证明原音1:1零偏移复用,口型本身是肉眼判的**→新片首用先跑 qc_lipsync 帧级验收。
+- **h3 的脾性(mmh3/rh 两个渠道通用,08-07 参阿婆片 + 08-10 秘塔实证)**:①**内容安全审查只审 prompt 文本**——台词原文、价格词("大几十")、"内脏"类词写进 prompt 就拒(不计费但白等),**图片和音频不审**;故 mm 段台词一律不进 prompt,口型靠 audioUrls 自带。⚠这和即梦 TNS(审人脸审图)正相反,消毒策略不能互相套用。②结果 URL 只活24小时,拿到即落盘。③轮询 40×12s 对8s段不够(任务其实会 SUCCESS)→ rh_gen 已按段时长放大预算,超时凭 taskId `--fetch` 补抓不重复扣费。④段内多镜的身份保持弱于即梦(护目镜漂成细框眼镜、领夹麦消失),长段优先拆。⑤seedream4.5 文生图总像素须≥3,686,400(9:16 用 1440×2560)——A模式想换掉原片主播长相时,生新锚图比抽原片帧干净且避开肖像问题。⑥口型的实证证据是"产物音轨 vs 输入wav 的 RMS 包络相关0.976",**这只证明原音1:1零偏移复用,口型本身是肉眼判的**→新片首用先跑 qc_lipsync 帧级验收。
 - **即梦**:必带 `--video_resolution`(1080p/4k 仅 `_vip` 档支持,非VIP只有720p);含真人脸 image2video 易拦(纯产品图安全);内部硬切 ≤3(5崩);VIP并发=1串行。**档位与价格见上面的单价表**;CLI 要常升级,否则看不到新模型(2.5 就是升级后才出现的)。
 - **反推**:Seed2.1Pro 加 `thinking:disabled`+`stream`(快17倍不掉精度);Bash默认2分超时会掐长请求→后台跑。
 - **反推模型脾性(07-19 K3对决,帧级实证)**:错误呈镜像——Seed病=静音字幕当口播(下游TTS会真配出这句)+运镜时序粗(漏侧机位/绕拍弱化);K3病=实体幻觉(员工性别人数看错/落地镜认成货架/1件彩虹T恤编成6~8件渐变陈列/花字"日常"抄成"日程")。故 merge_reverse 裁决分工=实体信Seed、运镜信K3;单模型跑时"开头台词"必过静音闸,外部反推的实体描述一律存疑。
 - **代理**:★全管线(火山API/即梦CLI/即梦CDN下载)国内直连,**无需任何代理**——代理是 Gemini 反推时代的遗留,已随引擎更换退役。系统全局 http_proxy 已被脚本显式绕开;极个别网络下载 CDN 失败时才设 DAIHUO_DOWNLOAD_PROXY。
 - **无 key 时的降级反推(08-07,备案不推荐)**:那台机器没 ARK/KIMI key,是 agent 逐帧看视频亲自当反推引擎+亲自当评委跑完的。能出活,但两个硬缺口要认:①agent 没有音轨输入,**台词只能从屏上字幕转写**——这正撞静音闸铁律(贴字≠口播),原音复用能兜住、TTS重配会配出幻听句;②自己生成自己打分(63/90)和 Seed 评委的 54/90 **不同口径不可比**。有 key 就别走这条。
-- **key/模型**:ark key 用环境变量 ARK_API_KEY;RunningHub key 用 RUNNINGHUB_API_KEY 或 ~/.config/daihuo-fanpai/rh_key(32位,企业级共享key,**钱包实扣**≈¥0.48/秒,提交前把总价算给用户并拿到同意);反推/评委模型默认公共模型名(可用 ARK_SEED_MODEL 覆盖),不再依赖私人 endpoint ID。小云雀 key 用 XYQ_ACCESS_KEY 或 ~/.config/daihuo-fanpai/xyq_key;模型默认交CLI(普通户 Seedance_2.0_mini_lite),用 XYQ_VIDEO_MODEL 覆盖。Kimi K3(双反推腿)key 用 KIMI_API_KEY 或 ~/.config/daihuo-fanpai/kimi_key,端点 api.moonshot.cn(国内直连),模型 kimi-k3(KIMI_K3_MODEL 覆盖);K3 始终开思考不可关、别传 temperature/thinking 参数;视频走 files(purpose=video)→ms://<id>,用完即删;WSL 对 moonshot 偶发连接抖动,k3_reverse 已内置3次重试。
+- **key/模型**:ark key 用环境变量 ARK_API_KEY;**mmh3(秘塔)key 用 MMH3_API_KEY 或 ~/.config/daihuo-fanpai/mmh3_key(mk-开头),base_url 用 DAIHUO_MMH3_BASE_URL 换渠道**;RunningHub key 用 RUNNINGHUB_API_KEY 或 ~/.config/daihuo-fanpai/rh_key(已退役,留作后路);钱包类后端提交前把总价算给用户并拿到同意;反推/评委模型默认公共模型名(可用 ARK_SEED_MODEL 覆盖),不再依赖私人 endpoint ID。小云雀 key 用 XYQ_ACCESS_KEY 或 ~/.config/daihuo-fanpai/xyq_key;模型默认交CLI(普通户 Seedance_2.0_mini_lite),用 XYQ_VIDEO_MODEL 覆盖。Kimi K3(双反推腿)key 用 KIMI_API_KEY 或 ~/.config/daihuo-fanpai/kimi_key,端点 api.moonshot.cn(国内直连),模型 kimi-k3(KIMI_K3_MODEL 覆盖);K3 始终开思考不可关、别传 temperature/thinking 参数;视频走 files(purpose=video)→ms://<id>,用完即删;WSL 对 moonshot 偶发连接抖动,k3_reverse 已内置3次重试。
 - **配音时长**:B模式改词后配音可能比原镜长——gen 已按段 wav 实际时长自动上调生成时长(上限15s,逼近上限会告警要求拆段)。
 - **后台命令**:别同时用 `nohup &` + run_in_background(外层立即返回致误报completed)。
 - **换声(Seed-VC)质量两要素**:①参考音频信噪比≥30dB(脏参考的底噪会被当音色学进产物,vc_segments已内置参考体检);②嫌有金属感/电流感伪影→`--steps 50~100`(默认30,换时间买干净)。
