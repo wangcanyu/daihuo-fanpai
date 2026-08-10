@@ -111,6 +111,24 @@ def check_rh():
     return OK, f"key {msg},认证探针通过 ⚠钱包计费≈¥0.48/秒,花钱前须用户点头"
 
 
+def check_mmh3():
+    # MiniMax H3 官方规范后端(秘塔渠道):第五条腿,h3 里最便宜的通道。可选 → 缺失只 WARN
+    import config
+    ok, msg = config.mmh3_key_status()
+    if not ok:
+        return WARN, f"key 未配(可选付费腿) → {msg}"
+    try:
+        import requests
+        r = requests.get(f"{config.MMH3_BASE_URL.rstrip('/')}/v2/query/video_generation/0",
+                         headers={"Authorization": f"Bearer {config.mmh3_key()}"},
+                         proxies={"http": None, "https": None}, timeout=20)
+        if r.status_code in (401, 403):
+            return WARN, f"key 无效(HTTP {r.status_code}) → 到 metaso.cn/minimax-h3 重新获取"
+    except Exception:
+        return WARN, f"key {msg},但探针网络失败(可稍后重试)"
+    return OK, f"key {msg},{config.MMH3_BASE_URL} ⚠钱包计费 768P≈¥0.09/秒"
+
+
 def check_cosyvoice():
     from config import COSYVOICE_HOME
     py = f"{COSYVOICE_HOME}/.venv/bin/python"
@@ -161,6 +179,7 @@ def main():
               ("Seed2.1Pro key(反推)", check_ark),
               ("Kimi K3(双反推腿,可选)", check_kimi),
               ("小云雀(生成备腿,可选)", check_xyq),
+              ("MiniMax H3规范(付费腿,可选)", check_mmh3),
               ("RunningHub海螺(付费腿,可选)", check_rh),
               ("CosyVoice(配音)", check_cosyvoice),
               ("Seed-VC(换声,可选)", check_seedvc),

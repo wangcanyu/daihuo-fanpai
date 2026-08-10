@@ -147,7 +147,9 @@ def _load_backend(name):
     if name == "xyq":
         import xyq_gen as m; return m         # 小云雀(pippit-tool-cli,独立credits池)
     if name == "rh":
-        import rh_gen as m; return m          # RunningHub海螺h3(钱包计费≈¥0.48/秒,唯一的mm备腿)
+        import rh_gen as m; return m          # RunningHub海螺h3(渠道价¥0.48/秒,已被 mmh3 取代)
+    if name == "mmh3":
+        import mmh3_gen as m; return m        # MiniMax H3 官方规范(秘塔渠道 768P¥0.09/秒,base_url可换)
     return None
 
 
@@ -155,7 +157,7 @@ def _load_backend(name):
 # 多提一条就 ret=1310 ExceedConcurrencyLimit(换 --session 也没用,08-09 穷举过);
 # RH 海螺 h3 实测 3 段同时提交全接受、完成间隔仅17-23秒=真并行。
 # ark/xyq 未测并发,保守按 1 处理,验过再加进来。
-CONCURRENT_BACKENDS = {"rh"}
+CONCURRENT_BACKENDS = {"rh", "mmh3"}   # mmh3 并发未实测,首次批量前先探(失败不计费)
 
 
 def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
@@ -197,8 +199,8 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
         segs = [s for s in segs if s["seg"] in only]
     alt = _load_backend(i2v_backend)
     mm_alt = _load_backend(mm_backend)
-    if mm_backend == "rh":
-        print("[gen][⚠] 口播段走 RunningHub 海螺h3:①提示词里【不能】有台词原文/价格词(审查只审文本,"
+    if mm_backend in ("rh", "mmh3"):
+        print("[gen][⚠] 口播段走海螺h3:①提示词里【不能】有台词原文/价格词(审查只审文本,"
               "会拒稿) ②首片请跑 qc_lipsync.py 帧级验收口型 ③钱包计费,确认用户已同意")
     jm = jimeng_model or JIMENG_MODEL
     if not jm.endswith("_vip") and jm != "seedance2.5":
@@ -306,10 +308,11 @@ if __name__ == "__main__":
     ap.add_argument("--clips", default="./clips")
     ap.add_argument("--audio-dir", default=None)
     ap.add_argument("--only", default=None, help="逗号分隔段名,如 S1,S3")
-    ap.add_argument("--i2v-backend", choices=["jimeng", "ark", "xyq", "rh"], default="jimeng",
-                    help="image2video段后端: jimeng(CLI积分池) / ark(火山按token) / xyq(小云雀credits) / rh(海螺,钱包¥0.48/秒)")
-    ap.add_argument("--mm-backend", choices=["jimeng", "rh"], default="jimeng",
-                    help="口播段后端: jimeng(CLI积分池,默认) / rh(海螺h3,audioUrls驱动口型;积分耗尽时的付费替代)")
+    ap.add_argument("--i2v-backend", choices=["jimeng", "ark", "xyq", "rh", "mmh3"], default="jimeng",
+                    help="image2video段后端: jimeng(积分池) / ark(火山按token) / xyq(小云雀) / "
+                         "mmh3(★MiniMax H3官方规范,秘塔渠道768P¥0.09/秒) / rh(同模型但渠道价¥0.48/秒,已被mmh3取代)")
+    ap.add_argument("--mm-backend", choices=["jimeng", "rh", "mmh3"], default="jimeng",
+                    help="口播段后端: jimeng(积分池,产品形体锚定最准) / mmh3(★H3最便宜,平面印刷图案强) / rh(同模型贵5倍)")
     ap.add_argument("--jimeng-model", default=None,
                     help=f"即梦档位,默认 {JIMENG_MODEL}(14积分/秒)。"
                          "★非VIP seedance2.0 虽便宜43%但排队实测15小时+且占死槽位,已判死;"
