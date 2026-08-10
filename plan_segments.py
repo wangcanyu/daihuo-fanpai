@@ -62,7 +62,25 @@ def split_long_shots(shots, max_dur=15):
     return out
 
 
-def group_shots(shots, max_cuts=MAX_CUTS, min_dur=0, hard_max_cuts=None):
+# ★镜头 → 生成腿的路由表(08-10 四方对照实测定的分工)。
+#   package_text 平面印刷图案 → h3 便宜且实测零错;hero_real 三维形体 → 只有即梦锚得住;
+#   其余无形体保真要求 → 取最便宜。物理动作难的镜由人审在 segments.md 里标 leg=jimeng25。
+LEG_BY_ROLE = {"package_text": "mmh3", "hero_real": "jimeng", "dynamic": "mmh3", "none": "mmh3"}
+LEG_DEFAULT = "mmh3"
+LEG_RATE = {"mmh3": 0.11, "jimeng": 0.742, "jimeng25": 1.378}   # ¥/秒,08-10 实测口径
+
+
+def shot_leg(s):
+    """单镜该走哪条腿。★hero_real 一票否决:同段里只要有一个形体镜,整段必须走即梦
+    (形体画错整段废,省不得那点钱)。"""
+    return LEG_BY_ROLE.get(s.get("product_role") or "none", LEG_DEFAULT)
+
+
+def seg_leg(shots):
+    return "jimeng" if any(shot_leg(s) == "jimeng" for s in shots) else LEG_DEFAULT
+
+
+def group_shots(shots, max_cuts=MAX_CUTS, min_dur=0, hard_max_cuts=None, by_leg=False):
     """按 ≤MAX_DUR 且 ≤max_cuts 把连续镜头归并成段。
 
     ★min_dur = 后端的最短生成时长(即梦4s / 海螺h3 5s)。>0 时开启"填满"模式:
@@ -74,22 +92,58 @@ def group_shots(shots, max_cuts=MAX_CUTS, min_dur=0, hard_max_cuts=None):
       快切片(本片30.5s里27刀)不设闸会把9个镜头塞进一段,远超即梦"内部硬切5崩"的红线、
       也超出 h3 已验证的3刀。够不到 min_dur 的段就认了那笔下限钱,别拿崩片去省。"""
     hard = hard_max_cuts or max_cuts
+    # ★by_leg:同段必须同腿。不同腿的镜头之间强制断开——否则一段里混了 hero_real,
+    #   整段被拖去走即梦(贵7倍);或反过来把形体镜混进 h3 段,产品画错整段废。
     segs, cur = [], []
     for s in shots:
         if not cur:
             cur = [s]; continue
         dur = s["end"] - cur[0]["start"]
         span = cur[-1]["end"] - cur[0]["start"]
-        if dur > MAX_DUR or len(cur) >= hard or (len(cur) >= max_cuts and span >= min_dur):
+        leg_break = by_leg and shot_leg(s) != shot_leg(cur[-1])
+        if leg_break or dur > MAX_DUR or len(cur) >= hard or (len(cur) >= max_cuts and span >= min_dur):
             segs.append(cur); cur = [s]
         else:
             cur.append(s)
     if cur:
         segs.append(cur)
+
+    # ★拆细与最短时长是对冲的:单独拆一段要按 min_dur 付费,并进邻段只按它的真实跨度付。
+    #   临界点 = min_dur × 本腿单价 ÷ 邻段单价。mmh3 镜并进即梦段:4×0.11÷0.742 ≈ 0.6秒
+    #   → 短于 0.6 秒的 mmh3 碎段并回去更省(08-10 实测撞见 0.04 秒的碎段却要付 4 秒的钱)。
+    #   ⚠反向不并:hero_real(jimeng)碎段再短也单独拆——形体画错整段废,且并进去会把
+    #   整段拖成即梦价(贵7倍),质量和成本都指向隔离。
+    if by_leg and min_dur:
+        i = 0
+        while i < len(segs) and len(segs) > 1:
+            g = segs[i]
+            span = g[-1]["end"] - g[0]["start"]
+            if seg_leg(g) == "jimeng":
+                i += 1; continue
+            merged = False
+            for j in (i - 1, i + 1):                    # 优先并回前一段,其次后一段
+                if not (0 <= j < len(segs)):
+                    continue
+                host = segs[j]
+                thresh = min_dur * LEG_RATE.get(seg_leg(g), .11) / LEG_RATE.get(seg_leg(host), .11)
+                merged_span = max(g[-1]["end"], host[-1]["end"]) - min(g[0]["start"], host[0]["start"])
+                if span >= thresh or len(host) + len(g) > hard or merged_span > MAX_DUR:
+                    continue
+                if j < i:
+                    host.extend(g)                      # 并到前一段尾部
+                else:
+                    segs[j] = g + host                  # 并到后一段头部(保持镜序)
+                segs.pop(i)
+                merged = True
+                break
+            if not merged:
+                i += 1
+
     # 收尾:末段不足 min_dur 时并回上一段(并回后不得超 MAX_DUR)
     if min_dur and len(segs) >= 2:
         last = segs[-1]
         if last[-1]["end"] - last[0]["start"] < min_dur and \
+           (not by_leg or seg_leg(segs[-2]) == seg_leg(last)) and \
            len(segs[-2]) + len(last) <= hard and \
            last[-1]["end"] - segs[-2][0]["start"] <= MAX_DUR:
             segs[-2].extend(segs.pop())
@@ -253,7 +307,8 @@ def completeness_check(prompt, shots, verbs=None):
     return warns
 
 
-def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0, hard_max_cuts=None):
+def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
+         hard_max_cuts=None, by_leg=False):
     sl = json.load(open(shotlist_path))
     cfg = json.load(open(assets_path))
     host = cfg.get("host_anchor", "")
@@ -263,7 +318,7 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0, har
     form_map = merged_form_map(cfg)
     verbs = PRODUCT_VERBS + [v for v in (cfg.get("product_verbs") or []) if v not in PRODUCT_VERBS]
     shots = split_long_shots(sl["shots"])       # 修1: 先拆超长单镜
-    groups = group_shots(shots, max_cuts, min_dur, hard_max_cuts)
+    groups = group_shots(shots, max_cuts, min_dur, hard_max_cuts, by_leg)
 
     segments, md = [], [f"# 生成方案 ({len(groups)}段)\n", f"产品: {prod_desc}\n"]
     for gi, shots in enumerate(groups, 1):
@@ -298,7 +353,8 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0, har
             seg = {"seg": sid, "type": "i2v", "anchor": anchor, "prompt": prompt}
         # 每段都记连续旁白(hero/包装段也要,装配时铺完整配音轨)
         seg_dialogue = "".join((s.get("dialogue") or "") for s in shots)
-        seg.update({"shots": [s["shot_id"] for s in shots],
+        seg.update({"leg": seg_leg(shots),
+                    "shots": [s["shot_id"] for s in shots],
                     "start": start, "end": end, "duration": dur,
                     "dialogue": seg_dialogue,
                     "opening_3s": any(s.get("is_opening_3s") for s in shots),
@@ -307,7 +363,8 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0, har
         # md 卡片
         flag = " ★前3秒" if seg["opening_3s"] else ""
         w = ("  ⚠️ " + "; ".join(warns)) if warns else ""
-        md.append(f"\n## {sid} [{start}-{end}] {dur}s  {role}{flag}{w}\n```\n{seg['prompt']}\n```")
+        md.append(f"\n## {sid} [{start}-{end}] {dur}s  {role} · 腿={seg['leg']}{flag}{w}\n"
+                  f"```\n{seg['prompt']}\n```")
 
     json.dump(segments, open(out_path, "w"), ensure_ascii=False, indent=2)
     mdp = out_path.replace(".json", ".md")
@@ -318,6 +375,15 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0, har
         tag = {"mm": "口播", "i2v": "image2video"}[s["type"]]
         print(f"  {s['seg']} [{s['start']}-{s['end']}] {s['duration']}s {tag}"
               + (f"  ⚠️{len(s['warns'])}漏" if s["warns"] else ""))
+    # ★成本估算:让人在烧钱前看见这次规划要花多少、钱花在哪条腿上
+    RATE = {"mmh3": 0.11, "jimeng": 0.742, "jimeng25": 1.378}
+    cost, bysec = 0.0, {}
+    for s in segments:
+        r = RATE.get(s.get("leg", "mmh3"), 0.11)
+        cost += s["duration"] * r
+        bysec[s.get("leg", "mmh3")] = bysec.get(s.get("leg", "mmh3"), 0) + s["duration"]
+    print("  成本估算: " + " + ".join(f"{k} {v}s×¥{RATE.get(k,0.11)}" for k, v in bysec.items())
+          + f" ≈ ¥{cost:.2f}")
     if nwarn:
         print(f"  ⚠️ 完备性关卡: {nwarn} 处漏动作,见 {mdp}")
     print(f"  人审稿: {mdp}")
@@ -334,9 +400,13 @@ if __name__ == "__main__":
                          "别让快切片每段只有2秒却按下限付5秒的钱。默认0=旧行为不变")
     ap.add_argument("--max-cuts", type=int, default=MAX_CUTS,
                     help="单段最多几个镜头(即梦内部硬切≤3,5崩;海螺h3已验3刀OK,更多未验)")
+    ap.add_argument("--by-leg", action="store_true",
+                    help="★按生成腿分段(同段必须同腿)。package_text→mmh3(平面印刷图案强且便宜)、"
+                         "hero_real→jimeng(唯一锚得住三维形体的)、其余→mmh3。"
+                         "不开则沿用旧行为(只按时长+镜数切)")
     ap.add_argument("--hard-max-cuts", type=int, default=None,
                     help="填满模式下的镜数天花板,绝不越过(默认=--max-cuts)。即梦内部硬切5崩,"
                          "h3已验3刀;快切片开填满时必须设,否则会把9个镜头塞进一段")
     a = ap.parse_args()
     out = a.out or os.path.join(os.path.dirname(a.shotlist), "segments.json")
-    plan(a.shotlist, a.assets, out, a.max_cuts, a.min_dur, a.hard_max_cuts)
+    plan(a.shotlist, a.assets, out, a.max_cuts, a.min_dur, a.hard_max_cuts, a.by_leg)

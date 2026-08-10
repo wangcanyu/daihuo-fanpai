@@ -82,7 +82,17 @@ python3 <engine>/doctor.py
 1.5 清单 python3 needed_assets.py run/shotlist.json
         → ★列出这条视频需要哪些产品形态图(礼盒/内包装/单根/裸品/剖面…)+ assets 骨架
         → 拿这份清单向用户要图(每个形态都要,漏了即梦会自由发挥编产品),填好 assets.json
-2 规划  python3 plan_segments.py run/shotlist.json assets.json --out run/segments.json [--min-dur 5 --hard-max-cuts 4]
+2 规划  python3 plan_segments.py run/shotlist.json assets.json --out run/segments.json --min-dur 4 --hard-max-cuts 4 --by-leg
+        → ★**--by-leg 按生成腿分段**(08-10 定的主力架构):同段必须同腿,并给每段打 `leg` 标记
+          package_text 平面印刷图案 → **mmh3**(¥0.11/秒,logo毛笔字三列小字实测零错)
+          hero_real   三维形体/质感 → **jimeng**(四方对照唯一锚得住的;一票否决,同段有它整段走即梦)
+          dynamic/none 人物氛围空镜 → **mmh3**(无形体保真要求,取最便宜)
+          物理动作难的镜 → 人审在 segments.md 里把 leg 改成 `jimeng25`(2.5的真正强项)
+        → ★内置**临界点合并**:拆细与最短时长是对冲的(单独拆按 min_dur 付费,并进邻段只按真实跨度付)。
+          临界 = min_dur × 本腿单价 ÷ 邻段单价,mmh3 并进即梦段 = 4×0.11÷0.742 ≈ 0.6秒 →
+          短于此的 mmh3 碎段自动并回(实测撞见 0.04 秒碎段却要付 4 秒的钱)。
+          ⚠反向不并:hero_real 碎段再短也隔离——形体错整段废,且并进去会把整段拖成即梦价(贵7倍)。
+        → 规划完会打印**成本估算**(按腿分列),烧钱前先看见钱花在哪
         → 自动拆超长镜/分段(≤12s≤3切)/路由(口播mm·hero/包装i2v)/写提示词(带全产品动作)
         → ★快切片必开【填满模式】:后端有最短生成时长(即梦4s/海螺h3 5s),每段跨度才1~3秒时
           等于白付下限的钱。`--min-dur <后端下限>` 让不够长的段继续并镜;**必须同时给
@@ -106,7 +116,9 @@ python3 <engine>/doctor.py
         (第三档·换声不换演:python3 vc_segments.py run/audio/seg --target 音色.wav —— Seed-VC把
          原片切段音频转成目标音色,表演节奏/语气逐帧保留,治"复用原音怕查重/重配丢表演"两难;
          ⚠️整段单音色,群戏需先说话人分离,未实现)
-4 生成  python3 gen_segments.py run/segments.json --clips run/clips --audio-dir run/audio/seg [--i2v-backend ark] [--mm-backend rh] [--jimeng-model seedance2.0_vip]
+4 生成  python3 gen_segments.py run/segments.json --clips run/clips --audio-dir run/audio/seg --auto-leg --concurrency 3
+        → ★**--auto-leg 按每段 leg 自动派发**(配合 --by-leg 使用):mmh3 段进并发池(实测真并行)、
+          即梦段走串行(通道并发=1)。一条片子里两条腿各跑各的,成本和质量同时兼顾。
         → 串行(VIP并发=1),口播段双图对口型,hero/包装段动你真图。断点续跑,--dry-run先看
         → ★**即梦默认档=`seedance2.0` 非VIP慢速排队**(8积分/秒,比VIP便宜43%)。代价是真排队
           (实测18分钟起),轮询预算已自动放到60分钟;超时不代表失败,submit_id 在 meta.json 可补抓。

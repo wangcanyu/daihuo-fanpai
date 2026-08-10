@@ -191,8 +191,13 @@ def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
         return {"seg": name, "error": f"{type(e).__name__}: {e}"}
 
 
+# ★leg → (后端, 即梦档位) 的派发表。plan_segments --by-leg 会给每段打 leg 标记。
+LEG_DISPATCH = {"mmh3": ("mmh3", None), "rh": ("rh", None),
+                "jimeng": (None, "seedance2.0_vip"), "jimeng25": (None, "seedance2.5")}
+
+
 def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_backend="jimeng",
-        jimeng_model=None, jimeng_res="720p", concurrency=1, alt_res="720p"):
+        jimeng_model=None, jimeng_res="720p", concurrency=1, alt_res="720p", auto_leg=False):
     segs = json.load(open(plan_path))
     os.makedirs(clips_dir, exist_ok=True)
     if only:
@@ -202,6 +207,10 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
     if mm_backend in ("rh", "mmh3"):
         print("[gen][⚠] 口播段走海螺h3:①提示词里【不能】有台词原文/价格词(审查只审文本,"
               "会拒稿) ②首片请跑 qc_lipsync.py 帧级验收口型 ③钱包计费,确认用户已同意")
+    if auto_leg:
+        from collections import Counter
+        c = Counter(s.get("leg", "?") for s in segs)
+        print(f"[gen] 按腿自动派发: {dict(c)}", flush=True)
     jm = jimeng_model or JIMENG_MODEL
     if not jm.endswith("_vip") and jm != "seedance2.5":
         print(f"[gen][⚠] 即梦档位={jm} 是非VIP慢速档 —— 实测排队15小时+仍未出片且占死并发槽,"
@@ -215,6 +224,11 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
             print(f"[skip] {s['seg']} 已存在")
 
     def _backend_of(s):
+        # ★--auto-leg:按每段自己的 leg 派发(平面印刷图案走 mmh3、三维形体走即梦),
+        #   而不是全片一刀切。leg 由 plan_segments --by-leg 写入。
+        if auto_leg and s.get("leg") in LEG_DISPATCH:
+            bk, _ = LEG_DISPATCH[s["leg"]]
+            return (_load_backend(bk), bk) if bk else (None, "jimeng")
         return (alt, i2v_backend) if s["type"] == "i2v" else (
             (mm_alt, mm_backend) if s["type"] == "mm" else (None, ""))
 
@@ -278,7 +292,10 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
         print(f"\n===== {name} {tag} {seg['duration']}s =====", flush=True)
         if dry:
             print("  [dry-run] cmd 略"); continue
-        sid, cc, out = submit(seg, audio_dir, jimeng_model, jimeng_res)
+        jm_seg = jimeng_model
+        if auto_leg and seg.get("leg") in LEG_DISPATCH:
+            jm_seg = LEG_DISPATCH[seg["leg"]][1] or jimeng_model
+        sid, cc, out = submit(seg, audio_dir, jm_seg, jimeng_res)
         if not sid:
             print(f"  [FAIL 提交无id] {out[-300:]}"); continue
         print(f"  submit_id={sid} credit={cc}", flush=True)
@@ -324,8 +341,11 @@ if __name__ == "__main__":
                          "即梦 CLI 通道账号级限流=1,多提必 ret=1310,换 session 也没用")
     ap.add_argument("--alt-res", default="720p",
                     help="替代后端的分辨率(rh: 720p→768P ¥0.48/秒 / 2k ¥0.77/秒)")
+    ap.add_argument("--auto-leg", action="store_true",
+                    help="★按每段的 leg 字段自动派发后端(需 plan_segments --by-leg 先打标)。"
+                         "package_text→mmh3 / hero_real→即梦2.0vip / 人审标 jimeng25→2.5")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     only = set(a.only.split(",")) if a.only else None
     run(a.plan, a.clips, a.audio_dir, only, a.dry_run, a.i2v_backend, a.mm_backend,
-        a.jimeng_model, a.jimeng_res, a.concurrency, a.alt_res)
+        a.jimeng_model, a.jimeng_res, a.concurrency, a.alt_res, a.auto_leg)
