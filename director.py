@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""
+director.py — 提示词「约束维度」检查表(生成前的最后一道闸)
+
+为什么不是一个 AI 模块:统计了全部翻车案例,**没有一条是"提示词写得不够漂亮"**,
+全是"某个约束缺席"——而缺席是可以机械检测的(关键词 → 该加哪条约束 → 提示词里有没有)。
+上 AI 反而引入方差,且治不了根(根是"没想到要加",不是"表达不好")。
+
+它是 plan_segments 里 completeness_check(只查"产品动作有没有漏进提示词")的推广:
+从查"动作"扩展到查"约束维度"。
+
+★用法铁律:**每翻一次车就往 RULES 里加一行**,把"想到要加什么约束"这件事固化下来,
+  越用越可靠。每条规则都记着它是被哪次事故教出来的。
+
+用法:
+  python3 director.py segments.json --shotlist shotlist.json --assets assets.json
+  python3 director.py segments.json --prompts-dir prompts   # 检查 h3 六段式提示词
+"""
+import argparse, json, os, re, sys
+
+# ─── 约束维度检查表 ──────────────────────────────────────────────────────────
+# applies_kw : 命中这些词 = 本段【需要】这条约束
+# present_kw : 提示词里出现任一 = 这条约束【已经在】(中英都列,h3提示词是英文)
+# 每条都写明「哪次翻车教的」,别删,它是这条规则的存在理由
+RULES = [
+    dict(
+        id="cast_count", name="人数硬约束",
+        why="07-12 榴莲群戏:不加会幻觉多生成人物;07-23 丢失它=口型错乱率 28%",
+        applies_kw=["两人", "三人", "二人", "他们", "两位", "另一个人", "员工", "同事",
+                    "老公", "老婆", "朋友", "闺蜜", "男伴", "对方"],
+        present_kw=["只有", "不要出现任何其他人物", "exactly one person", "no other person",
+                    "only these", "个角色"],
+        fix="加:『画面中自始至终只有X、Y这N个角色,不要出现任何其他人物』",
+    ),
+    dict(
+        id="subject_side", name="施术/受术方(左右)硬约束",
+        why="08-11 锦鲤快快游:只写『依次搓一根手指…最后展示』没写哪只手 → "
+            "左手搓右手却举左手展示,对比卖点归零",
+        applies_kw=["对比", "另一条", "另一只", "另一半", "两条腿", "两只手", "一半",
+                    "单侧", "左右", "未洗", "没洗", "洗过", "搓过"],
+        present_kw=["左手", "右手", "left hand", "right hand", "左腿", "右腿",
+                    "left leg", "right leg"],
+        fix="加:『用【左手】持产品施力,被处理、被展示的【始终是右手】;每个阶段都是 "
+            "左手拿→处理右手→右手变化;结尾举起展示的【必须是右手】,绝不能举左手;"
+            "未处理的左手保持原样作对比』(左右可换,关键是写死并反复重申)",
+    ),
+    dict(
+        id="beat_timing", name="节拍时间分配",
+        why="08-11 锦鲤快快游 27 秒一镜到底:只给动作顺序不给时长 → 模型平均用力,"
+            "搅拌咖啡杯那段占了过长",
+        applies_when=lambda seg, shots: (len(shots) <= 1 and float(seg.get("duration", 0)) >= 10),
+        present_kw=["秒:", "秒 :", "0-", "At 00:", "seconds:", "s:"],
+        fix="加逐段时间轴:『0-6秒做A(这一段要快,6秒内完成) / 6-12秒做B / 12-18秒做C…』"
+            "——一次生成长片时模型不知道每个动作该占多久",
+    ),
+    dict(
+        id="appearance_precedence", name="产品外观优先级归锚图",
+        why="08-09 美吉吉2:分镜表写着旧品牌的『标签』『漩涡浮雕』→ 皂上印出乱码字、"
+            "三角皂变方皂。逐镜动作的描述会压过 form_desc",
+        applies_kw=["标签", "压印", "浮雕", "花纹", "字样", "刻字", "商标", "logo",
+                    "成分表", "印有", "盒面印"],
+        present_kw=["以此图为准", "外观", "precedence", "governed SOLELY",
+                    "ignore that detail", "不要改产品外观"],
+        fix="加:『产品的形状/颜色/表面纹理/压印/标签/文字一律以参考图为准;"
+            "镜头描述里提到的任何标签、浮雕、图案、文字,一概忽略,按参考图原样呈现』"
+            "(更稳的是回 shotlist 直接改写原文)",
+    ),
+    dict(
+        id="outfit_stripped", name="逐镜着装已剥离",
+        why="08-09 大鹅4/美吉吉2:多日打卡 vlog 逐镜写『换穿白色蕾丝吊带』,而主播锚图"
+            "只有一套衣服 → 提示词自相矛盾,模型必漂",
+        applies_kw=["吊带", "背心", "睡裙", "睡袍", "浴巾", "浴帽", "内搭", "换穿",
+                    "换装", "身着", "蕾丝", "缎面"],
+        present_kw=[],          # 这条要的是"不该出现",特殊处理
+        forbid=True,
+        fix="剥离逐镜着装描述,服装统一由 host_desc + 锚图治理(h3_prompt 已自动剥,"
+            "即梦腿的提示词要手动检查)",
+    ),
+    dict(
+        id="post_fx_stripped", name="贴字/后期特效已剥离",
+        why="07-24 七子白:K3 把『弹出黄色标注』写进 action,泄漏进提示词被画进实拍层",
+        applies_kw=["花字", "贴字", "字幕", "标注", "叠加", "圈住", "虚线圆", "箭头",
+                    "高亮", "转场特效"],
+        present_kw=[], forbid=True,
+        fix="剥离——这些是剪映的活,让模型画会画进实拍层",
+    ),
+    dict(
+        id="third_party_ip", name="第三方 IP / 品牌已剥离",
+        why="08-09 蕾蕾片:电视里在放动画 IP;07-24:GUCCI/RNW 等第三方品牌",
+        applies_kw=[],          # 用正则单独判
+        applies_re=r"《[^》]{1,20}》",
+        present_kw=[], forbid=True,
+        fix="从 shotlist 抹成泛称(如『电视播放动画节目』),第三方品牌一律不进提示词",
+    ),
+    dict(
+        id="env_lock", name="状态参考图的环境钉死",
+        why="08-09 李时珍 S8:挂了深棕影棚背景的『泡沫态』图当锚 → 整镜背景被带成影棚,"
+            "与浴室场景断裂",
+        applies_when=lambda seg, shots: any(
+            k in str(seg.get("anchor_labels") or []) + str(seg.get("images") or [])
+            for k in ("泡沫", "hero_alt", "使用", "状态")),
+        present_kw=["背景", "环境", "stays inside", "background and lighting",
+                    "do not import", "场景保持"],
+        fix="在该镜显式写死环境:『本镜仍在<原场景>,背景与光照保持不变,"
+            "不要带入任何参考图的背景或色调』",
+    ),
+    dict(
+        id="no_dialogue_in_h3", name="台词不进 h3 提示词",
+        why="08-07 参阿婆:h3 的内容安全审查【只审 prompt 文本】,台词原文/价格词必拒;"
+            "口型靠 audioUrls 自带即可",
+        h3_only=True,
+        applies_when=lambda seg, shots: bool((seg.get("dialogue") or "").strip()),
+        present_kw=[], forbid_text=lambda seg: (seg.get("dialogue") or "")[:12],
+        fix="把台词原文从提示词里删掉(h3_prompt 已自动剥;手写提示词时最容易忘)",
+    ),
+]
+
+
+def _blob(seg, shots):
+    return " ".join([(s.get("action") or "") + (s.get("subject") or "") +
+                     (s.get("product_in_frame") or "") + (s.get("scene") or "")
+                     for s in shots])
+
+
+def check_segment(seg, shots, prompt, is_h3=False):
+    """返回该段缺失/违规的约束列表 [(rule, 说明)]"""
+    src = _blob(seg, shots)
+    p = prompt or ""
+    out = []
+    for r in RULES:
+        if r.get("h3_only") and not is_h3:
+            continue
+        # 是否适用
+        if r.get("applies_when"):
+            applies = bool(r["applies_when"](seg, shots))
+        elif r.get("applies_re"):
+            applies = bool(re.search(r["applies_re"], src))
+        else:
+            applies = any(k in src for k in r.get("applies_kw", []))
+        if not applies:
+            continue
+        # 是否已满足
+        if r.get("forbid"):                       # 这类要求"不该出现在提示词里"
+            hit = [k for k in r.get("applies_kw", []) if k in p]
+            if r.get("applies_re"):
+                hit += re.findall(r["applies_re"], p)
+            if hit:
+                out.append((r, f"提示词里仍残留 {hit[:3]}"))
+        elif r.get("forbid_text"):
+            t = r["forbid_text"](seg)
+            if t and t in p:
+                out.append((r, f"台词原文『{t}…』出现在提示词里"))
+        else:
+            if not any(k in p for k in r["present_kw"]):
+                out.append((r, "本段需要这条约束,但提示词里没有"))
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("plan")
+    ap.add_argument("--shotlist", required=True)
+    ap.add_argument("--assets", default=None)
+    ap.add_argument("--prompts-dir", default=None,
+                    help="给了就检查该目录下的 <seg>_h3.txt(h3 六段式),否则检查 segments.json 里的 prompt")
+    ap.add_argument("--strict", action="store_true", help="有缺失就以非零码退出(可当闸门用)")
+    a = ap.parse_args()
+
+    segs = json.load(open(a.plan))
+    sl = {str(s["shot_id"]): s for s in json.load(open(a.shotlist))["shots"]}
+    total = 0
+    print(f"[director] 约束维度检查 — {len(segs)} 段,{len(RULES)} 条规则\n")
+    for seg in segs:
+        shots = [sl[str(x)] for x in seg.get("shots", []) if str(x) in sl]
+        if a.prompts_dir:
+            f = os.path.join(a.prompts_dir, f"{seg['seg']}_h3.txt")
+            prompt = open(f).read() if os.path.exists(f) else ""
+            is_h3 = True
+        else:
+            prompt, is_h3 = seg.get("prompt", ""), False
+        miss = check_segment(seg, shots, prompt, is_h3)
+        if not miss:
+            continue
+        total += len(miss)
+        print(f"  【{seg['seg']}】{seg.get('duration','?')}s  {len(shots)}镜")
+        for r, why in miss:
+            print(f"    ✗ {r['name']}  — {why}")
+            print(f"      修:{r['fix']}")
+            print(f"      (这条是被这次教的:{r['why']})")
+        print()
+    if total == 0:
+        print("  ✓ 全部通过,没有缺席的约束")
+    else:
+        print(f"  共 {total} 处缺失 —— **这是生成前的最后一道闸,别带着缺失去烧钱**")
+    if a.strict and total:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
