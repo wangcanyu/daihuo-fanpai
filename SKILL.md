@@ -13,7 +13,7 @@ updated: 2026-07-13
 反推爆款 → 迁移到目标产品 → 即梦生成 → 配音拼接。核心洞察:**病在"反推→写提示词"的转换环节会丢细节/丢动作,不在模型**。本 skill 把验证过的管线固化,每步产物可审。
 
 引擎在本目录(可插拔,换实现只改单个文件):
-`seed_reverse.py` 反推 · `merge_reverse.py` 双反推合并 · `plan_segments.py` 规划 · `h3_prompt.py` 海螺提示词生成 · `cut_audio.py` 原音切段(≥2s闸+timing.json) · `patch_cast.py` 群戏/多人补丁(人数硬约束) · `gen_segments.py` 生成 · `qc_lipsync.py` 帧级口型质检 · `tts_segments.py` 配音 · `assemble.py` 装配 · `deliver.py` 交付(剪映草稿/成品) · `doctor.py` 体检。
+`seed_reverse.py` 反推 · `merge_reverse.py` 双反推合并 · `plan_segments.py` 规划 · `h3_prompt.py` 海螺提示词生成 · **`director.py` 约束维度检查(生成前最后一道闸)** · `seam_pick.py` 一镜到底续接挑缝 · `cut_audio.py` 原音切段(≥2s闸+timing.json) · `patch_cast.py` 群戏/多人补丁(人数硬约束) · `gen_segments.py` 生成 · `qc_lipsync.py` 帧级口型质检 · `tts_segments.py` 配音 · `assemble.py` 装配 · `deliver.py` 交付(剪映草稿/成品) · `doctor.py` 体检。
 生成后端(可插拔,契约 `submit_*()->tid` / `wait_download(tid,dst)->(size,usage)`):即梦CLI(内置) · **`mmh3_gen.py` MiniMax H3 官方规范(秘塔渠道,h3 首选)** · `ark_gen.py` 火山 · `xyq_gen.py` 小云雀 · `rh_gen.py` RunningHub海螺h3(同模型贵4.4倍,已退役)。
 
 > **要改造/换引擎/接手本 skill?先读 `DESIGN.md`**(设计理由 + 数据契约 + 扩展点)。参考样例在 `references/`。
@@ -113,6 +113,14 @@ python3 <engine>/doctor.py
         → 敏感词**只报警不自动改**:h3 拒稿不计费,先按原样试,被拒再消毒
           (08-09 教训:预防性把"针管"改成"美妆工具柄",道具直接走形,钩子废了)
         → 产物 prompts/<seg>_h3.txt + images.json,人过一遍再喂 gen_segments
+2.8 ★约束闸  python3 director.py run/segments.json --shotlist run/shotlist.json [--prompts-dir run/prompts] [--strict]
+        → **生成前的最后一道闸,别带着缺失去烧钱**。它检查的不是"提示词写得漂不漂亮",
+          而是"某个必须的约束在不在"——统计全部翻车案例,**没有一条是表达问题,全是约束缺席**。
+        → 9 条规则各自记着"是被哪次事故教出来的":人数硬约束/施术受术方(左右)/节拍时间分配/
+          产品外观优先级归锚图/逐镜着装已剥离/贴字特效已剥离/第三方IP已剥离/状态参考图环境钉死/
+          台词不进h3提示词。命中"该加而没加"就报警并给出可直接抄的修法。
+        → ★**每翻一次车就往 director.py 的 RULES 加一行**——把"想到要加什么约束"固化下来,越用越可靠。
+          08-11 回归验证:翻车那版提示词被精确抓出 2 处缺失(左右手/节拍),修正版全绿。
 3 配音  python3 tts_segments.py run/segments.json --out-dir run/audio/seg
         (降级:复用原音时跳过此步,改用 cut_audio.py 按段切原片音频:
          python3 cut_audio.py run/segments.json --video 原片.mp4 --shotlist run/shotlist.json --out run/audio/seg
