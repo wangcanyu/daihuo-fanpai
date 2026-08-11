@@ -28,18 +28,26 @@ RULES = [
         why="07-12 榴莲群戏:不加会幻觉多生成人物;07-23 丢失它=口型错乱率 28%",
         applies_kw=["两人", "三人", "二人", "他们", "两位", "另一个人", "员工", "同事",
                     "老公", "老婆", "朋友", "闺蜜", "男伴", "对方"],
-        present_kw=["只有", "不要出现任何其他人物", "exactly one person", "no other person",
-                    "only these", "个角色"],
+        present_kw=["只有", "不要出现任何其他人物", "个角色",
+                    "exactly one person", "exactly two", "exactly three", "exactly four",
+                    "no other person", "no additional", "only these", "cast constraint",
+                    "people on screen"],
         fix="加:『画面中自始至终只有X、Y这N个角色,不要出现任何其他人物』",
     ),
     dict(
         id="subject_side", name="施术/受术方(左右)硬约束",
         why="08-11 锦鲤快快游:只写『依次搓一根手指…最后展示』没写哪只手 → "
             "左手搓右手却举左手展示,对比卖点归零",
-        applies_kw=["对比", "另一条", "另一只", "另一半", "两条腿", "两只手", "一半",
-                    "单侧", "左右", "未洗", "没洗", "洗过", "搓过"],
-        present_kw=["左手", "右手", "left hand", "right hand", "左腿", "右腿",
-                    "left leg", "right leg"],
+        # ★收紧(08-11 实战):只用"另一只手"这类词会把【双手分工】(一手拿盒盖、一手指脸颊)
+        #   也报出来——那不是对比,不需要这条约束。改成【必须同时命中"部位词"和"对比语义词"】。
+        #   实测 7 处报警里 5 处是这类误报,收紧后只剩真正的对比镜。
+        applies_all=[
+            ["左右", "两条", "两只", "另一条", "另一半", "单侧", "腿", "手"],       # 部位/两侧
+            ["对比", "差异", "正版", "盗版", "真假", "假货", "未洗", "没洗",
+             "洗过", "搓过", "一半", "分别持", "肤色差"],                          # 对比语义
+        ],
+        present_kw=["左手", "右手", "左腿", "右腿", "left hand", "right hand",
+                    "left leg", "right leg", "side assignment", "never swap"],
         fix="加:『用【左手】持产品施力,被处理、被展示的【始终是右手】;每个阶段都是 "
             "左手拿→处理右手→右手变化;结尾举起展示的【必须是右手】,绝不能举左手;"
             "未处理的左手保持原样作对比』(左右可换,关键是写死并反复重申)",
@@ -131,7 +139,9 @@ def check_segment(seg, shots, prompt, is_h3=False):
         if r.get("h3_only") and not is_h3:
             continue
         # 是否适用
-        if r.get("applies_when"):
+        if r.get("applies_all"):
+            applies = all(any(k in src for k in grp) for grp in r["applies_all"])
+        elif r.get("applies_when"):
             applies = bool(r["applies_when"](seg, shots))
         elif r.get("applies_re"):
             applies = bool(re.search(r["applies_re"], src))
@@ -151,7 +161,10 @@ def check_segment(seg, shots, prompt, is_h3=False):
             if t and t in p:
                 out.append((r, f"台词原文『{t}…』出现在提示词里"))
         else:
-            if not any(k in p for k in r["present_kw"]):
+            # ★大小写不敏感:提示词正文是英文,"LEFT hand" 与 present_kw 的 "left hand"
+            #   大小写不同就匹配不上 → 明明加了约束却报"没加",会让人不信这个闸(08-11 实撞)
+            pl = p.lower()
+            if not any(k.lower() in pl for k in r["present_kw"]):
                 out.append((r, "本段需要这条约束,但提示词里没有"))
     return out
 

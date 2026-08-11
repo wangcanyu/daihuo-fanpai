@@ -70,17 +70,35 @@ LEG_DEFAULT = "mmh3"
 LEG_RATE = {"mmh3": 0.11, "jimeng": 0.742, "jimeng25": 1.378}   # ¥/秒,08-10 实测口径
 
 
-def shot_leg(s):
+# ★hero_real 的"真伪"门槛(08-11 定):product_role 是镜级粗标签,很多"手持产品的人物戏"
+#   也被标成 hero_real,但它们并不是"微距怼产品质感"——把它们送去即梦(贵7~11倍)是浪费。
+#   判据用【产品占画面比例】:占满/2/3/特写/微距/质感 才是真形体镜。
+#   实测(四条新片):hero_real 1056积分 → 352积分,省 705 分;小禾家 20.6s 全是集市人物戏,
+#   产品只是拿在手里,全部可降级。
+HERO_HIGH = ("占满画面", "占满", "2/3", "特写", "微距", "质感", "占画面中央部分")
+
+
+def _is_real_hero(s):
+    blob = (s.get("product_in_frame") or "") + (s.get("action") or "")
+    return any(k in blob for k in HERO_HIGH)
+
+
+def shot_leg(s, hero_strict=False):
     """单镜该走哪条腿。★hero_real 一票否决:同段里只要有一个形体镜,整段必须走即梦
-    (形体画错整段废,省不得那点钱)。"""
-    return LEG_BY_ROLE.get(s.get("product_role") or "none", LEG_DEFAULT)
+    (形体画错整段废,省不得那点钱)。
+    hero_strict=True 时对 hero_real 再过一道占比门槛,不够格的降级到便宜腿。"""
+    role = s.get("product_role") or "none"
+    if role == "hero_real" and hero_strict and not _is_real_hero(s):
+        return LEG_DEFAULT
+    return LEG_BY_ROLE.get(role, LEG_DEFAULT)
 
 
-def seg_leg(shots):
-    return "jimeng" if any(shot_leg(s) == "jimeng" for s in shots) else LEG_DEFAULT
+def seg_leg(shots, hero_strict=False):
+    return "jimeng" if any(shot_leg(s, hero_strict) == "jimeng" for s in shots) else LEG_DEFAULT
 
 
-def group_shots(shots, max_cuts=MAX_CUTS, min_dur=0, hard_max_cuts=None, by_leg=False):
+def group_shots(shots, max_cuts=MAX_CUTS, min_dur=0, hard_max_cuts=None, by_leg=False,
+                hero_strict=False):
     """按 ≤MAX_DUR 且 ≤max_cuts 把连续镜头归并成段。
 
     ★min_dur = 后端的最短生成时长(即梦4s / 海螺h3 5s)。>0 时开启"填满"模式:
@@ -100,7 +118,7 @@ def group_shots(shots, max_cuts=MAX_CUTS, min_dur=0, hard_max_cuts=None, by_leg=
             cur = [s]; continue
         dur = s["end"] - cur[0]["start"]
         span = cur[-1]["end"] - cur[0]["start"]
-        leg_break = by_leg and shot_leg(s) != shot_leg(cur[-1])
+        leg_break = by_leg and shot_leg(s, hero_strict) != shot_leg(cur[-1], hero_strict)
         if leg_break or dur > MAX_DUR or len(cur) >= hard or (len(cur) >= max_cuts and span >= min_dur):
             segs.append(cur); cur = [s]
         else:
@@ -118,14 +136,15 @@ def group_shots(shots, max_cuts=MAX_CUTS, min_dur=0, hard_max_cuts=None, by_leg=
         while i < len(segs) and len(segs) > 1:
             g = segs[i]
             span = g[-1]["end"] - g[0]["start"]
-            if seg_leg(g) == "jimeng":
+            if seg_leg(g, hero_strict) == "jimeng":
                 i += 1; continue
             merged = False
             for j in (i - 1, i + 1):                    # 优先并回前一段,其次后一段
                 if not (0 <= j < len(segs)):
                     continue
                 host = segs[j]
-                thresh = min_dur * LEG_RATE.get(seg_leg(g), .11) / LEG_RATE.get(seg_leg(host), .11)
+                thresh = min_dur * LEG_RATE.get(seg_leg(g, hero_strict), .11) / \
+                    LEG_RATE.get(seg_leg(host, hero_strict), .11)
                 merged_span = max(g[-1]["end"], host[-1]["end"]) - min(g[0]["start"], host[0]["start"])
                 if span >= thresh or len(host) + len(g) > hard or merged_span > MAX_DUR:
                     continue
@@ -143,7 +162,7 @@ def group_shots(shots, max_cuts=MAX_CUTS, min_dur=0, hard_max_cuts=None, by_leg=
     if min_dur and len(segs) >= 2:
         last = segs[-1]
         if last[-1]["end"] - last[0]["start"] < min_dur and \
-           (not by_leg or seg_leg(segs[-2]) == seg_leg(last)) and \
+           (not by_leg or seg_leg(segs[-2], hero_strict) == seg_leg(last, hero_strict)) and \
            len(segs[-2]) + len(last) <= hard and \
            last[-1]["end"] - segs[-2][0]["start"] <= MAX_DUR:
             segs[-2].extend(segs.pop())
@@ -308,7 +327,7 @@ def completeness_check(prompt, shots, verbs=None):
 
 
 def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
-         hard_max_cuts=None, by_leg=False):
+         hard_max_cuts=None, by_leg=False, hero_strict=False):
     sl = json.load(open(shotlist_path))
     cfg = json.load(open(assets_path))
     host = cfg.get("host_anchor", "")
@@ -318,7 +337,7 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
     form_map = merged_form_map(cfg)
     verbs = PRODUCT_VERBS + [v for v in (cfg.get("product_verbs") or []) if v not in PRODUCT_VERBS]
     shots = split_long_shots(sl["shots"])       # 修1: 先拆超长单镜
-    groups = group_shots(shots, max_cuts, min_dur, hard_max_cuts, by_leg)
+    groups = group_shots(shots, max_cuts, min_dur, hard_max_cuts, by_leg, hero_strict)
 
     segments, md = [], [f"# 生成方案 ({len(groups)}段)\n", f"产品: {prod_desc}\n"]
     for gi, shots in enumerate(groups, 1):
@@ -353,7 +372,7 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
             seg = {"seg": sid, "type": "i2v", "anchor": anchor, "prompt": prompt}
         # 每段都记连续旁白(hero/包装段也要,装配时铺完整配音轨)
         seg_dialogue = "".join((s.get("dialogue") or "") for s in shots)
-        seg.update({"leg": seg_leg(shots),
+        seg.update({"leg": seg_leg(shots, hero_strict),
                     "shots": [s["shot_id"] for s in shots],
                     "start": start, "end": end, "duration": dur,
                     "dialogue": seg_dialogue,
@@ -400,6 +419,9 @@ if __name__ == "__main__":
                          "别让快切片每段只有2秒却按下限付5秒的钱。默认0=旧行为不变")
     ap.add_argument("--max-cuts", type=int, default=MAX_CUTS,
                     help="单段最多几个镜头(即梦内部硬切≤3,5崩;海螺h3已验3刀OK,更多未验)")
+    ap.add_argument("--hero-strict", action="store_true",
+                    help="★对 hero_real 再过一道【产品占画面比例】门槛(占满/2\u002f3/特写/微距/质感 才算真形体镜),"
+                         "不够格的降级到便宜腿。治'手持产品的人物戏被误标 hero_real'白付贵价")
     ap.add_argument("--by-leg", action="store_true",
                     help="★按生成腿分段(同段必须同腿)。package_text→mmh3(平面印刷图案强且便宜)、"
                          "hero_real→jimeng(唯一锚得住三维形体的)、其余→mmh3。"
@@ -409,4 +431,4 @@ if __name__ == "__main__":
                          "h3已验3刀;快切片开填满时必须设,否则会把9个镜头塞进一段")
     a = ap.parse_args()
     out = a.out or os.path.join(os.path.dirname(a.shotlist), "segments.json")
-    plan(a.shotlist, a.assets, out, a.max_cuts, a.min_dur, a.hard_max_cuts, a.by_leg)
+    plan(a.shotlist, a.assets, out, a.max_cuts, a.min_dur, a.hard_max_cuts, a.by_leg, a.hero_strict)
