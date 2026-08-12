@@ -140,16 +140,24 @@ def build(seg, shots, cfg, en):
     #   同时要油背+皂体+纸盒,只挂一张必然让模型自由发挥另外两样)。
     # ★判据看"标签够不够"而不是看 type:灌完 h3 提示词后 type 会被改成 mm,
     #   再跑一次就走不进这个分支、anchor_labels 只剩一个 → 多锚图白挂(08-09 自伤)
-    if len(labels) < len(imgs) or not labels:
+    # ★★ imgs 的语义必须先统一成【纯产品列表】再往下走。
+    #   plan 落下来的 seg["images"] 是 [主播]+[产品…](即梦那套的排法),而 labels 只有产品,
+    #   于是 len(labels)<len(imgs) 对每个 mm 段恒真 → 分支必进 → 重挑后 imgs 变成纯产品,
+    #   下面却仍按"第一张是主播"切 imgs[1:],把【第一个产品形态当成主播删掉】。
+    #   只匹配到一种形态时产品图就全没了 —— 提示词还写着 "holds soap package",
+    #   模型没有皂的参考只能瞎编(08-11 爆爆朵一 S3 编出绿叶软包装袋;23/58 段中招)。
+    host_a = cfg.get("host_anchor")
+    prod_only = [p for p in imgs if p != host_a]        # 先剥掉主播,语义归一
+    if len(labels) < len(prod_only) or not labels:
         try:
             from plan_segments import pick_product_anchors, merged_form_map
             got, _miss = pick_product_anchors(shots, cfg.get("products", {}), merged_form_map(cfg))
             if got:
                 labels = [l for l, _ in got]
-                imgs = [pth for _, pth in got]
+                prod_only = [pth for _, pth in got]
         except Exception:
             pass
-    has_host = bool(cfg.get("host_anchor")) and seg["type"] == "mm"
+    has_host = bool(host_a) and seg["type"] == "mm"
     # Picture 编号:mm 段 @图片1=主播,其后是各产品形态;i2v 段只有产品
     pics, defs, subj_ids, need_fd = [], [], {}, []
     n = 1
@@ -160,7 +168,7 @@ def build(seg, shots, cfg, en):
         subj_ids["host"] = 1
         n = 2
     sid = n
-    prod_imgs = imgs[1:] if has_host else imgs
+    prod_imgs = prod_only          # 已是纯产品列表,不再按下标切
     for i, path in enumerate(prod_imgs):
         label = labels[i] if i < len(labels) else "product"
         # ★逐形态描述:assets.json 的 form_desc 优先。不是所有锚图都是"产品"——
@@ -272,6 +280,11 @@ def build(seg, shots, cfg, en):
         "ignore that detail and render the product exactly as its reference picture shows.", "",
         "Additional constraints: no subtitles, no captions, no on-screen text overlays, "
         "no logo, no watermark anywhere in the frame.",
+        # ★逐段追加约束:director 报出缺失后【手改提示词活不过下一次重生成】——
+        #   08-11 改完 S1/S4/S10 三处,一次 h3_prompt 重跑就全冲掉了。
+        #   所以补丁必须写进 assets.json 的 extra_constraints,由这里注入。
+        *([(cfg.get("extra_constraints") or {}).get(seg["seg"], "")]
+          if (cfg.get("extra_constraints") or {}).get(seg["seg"]) else []),
     ]), pics
 
 

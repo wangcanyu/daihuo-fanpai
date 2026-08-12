@@ -113,6 +113,18 @@ RULES = [
             "不要带入任何参考图的背景或色调』",
     ),
     dict(
+        id="product_ref_present", name="提到产品必须挂产品参考图",
+        why="08-09 美吉吉2 凭空多出方盒子、08-11 爆爆朵一 S3 编出绿叶软包装袋 —— 都是"
+            "提示词写着『手持皂包装』但 images 里只有主播锚图。模型没有产品参考就只能瞎编,"
+            "而这是【机械可查】的:提示词提到产品 ⇄ 参考图里有没有产品",
+        applies_kw=["皂", "产品", "包装", "盒", "瓶", "袋", "膏", "霜"],
+        # 特殊:查的不是提示词文本,而是该段挂了几张【非主播】参考图
+        needs_prod_img=True,
+        present_kw=[],
+        fix="给该段挂上对应形态的产品锚图(assets.json 的 products/forms 别名要能被分镜文本命中);"
+            "确实不该出现产品的镜头(如只拍手机),把提示词里的产品字样一并删掉",
+    ),
+    dict(
         id="no_dialogue_in_h3", name="台词不进 h3 提示词",
         why="08-07 参阿婆:h3 的内容安全审查【只审 prompt 文本】,台词原文/价格词必拒;"
             "口型靠 audioUrls 自带即可",
@@ -150,7 +162,12 @@ def check_segment(seg, shots, prompt, is_h3=False):
         if not applies:
             continue
         # 是否已满足
-        if r.get("forbid"):                       # 这类要求"不该出现在提示词里"
+        if r.get("needs_prod_img"):               # 查的是参考图构成,不是提示词文本
+            prod = [x for x in (seg.get("images") or [])
+                    if "host_anchor" not in str(x) and "scene" not in str(x)]
+            if not prod:
+                out.append((r, "本段提到产品,但参考图里只有主播/场景,没有任何产品图"))
+        elif r.get("forbid"):                     # 这类要求"不该出现在提示词里"
             hit = [k for k in r.get("applies_kw", []) if k in p]
             if r.get("applies_re"):
                 hit += re.findall(r["applies_re"], p)
@@ -181,6 +198,13 @@ def main():
 
     segs = json.load(open(a.plan))
     sl = {str(s["shot_id"]): s for s in json.load(open(a.shotlist))["shots"]}
+    # ★检查 h3 提示词时,参考图的真相在 prompts/images.json(那才是喂给模型的清单),
+    #   不是 segments.json 里 plan 阶段留下的旧 images
+    if a.prompts_dir and os.path.exists(os.path.join(a.prompts_dir, "images.json")):
+        man = json.load(open(os.path.join(a.prompts_dir, "images.json")))
+        for s in segs:
+            if s["seg"] in man:
+                s["images"] = man[s["seg"]]
     total = 0
     print(f"[director] 约束维度检查 — {len(segs)} 段,{len(RULES)} 条规则\n")
     for seg in segs:

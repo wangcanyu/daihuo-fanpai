@@ -13,7 +13,7 @@ gen_segments.py — 生成消费端(吃 plan_segments 的方案 → 串行调即
 用法: python3 gen_segments.py segments.json --clips ./clips [--audio-dir ./audio/seg]
                                 [--only S1,S3] [--dry-run]
 """
-import argparse, json, os, re, subprocess, time, urllib.request
+import argparse, json, math, os, re, subprocess, time, urllib.request
 
 from config import DOWNLOAD_PROXY, jimeng_env
 DREAMINA = os.path.expanduser("~/.local/bin/dreamina")
@@ -60,7 +60,12 @@ def submit(seg, audio_dir, model=None, res="720p"):
     model = model or JIMENG_MODEL
     if res in VIP_ONLY_RES and not model.endswith("_vip"):
         raise ValueError(f"{res} 只有 VIP 档支持,请加 --jimeng-model seedance2.0_vip")
-    t = seg["type"]; dur = str(seg["duration"])
+    t = seg["type"]
+    # ★即梦 CLI 的 --duration 只吃整数,传 "4.0" 直接 ParseInt 报错整段废
+    #   (08-11 实撞:plan_segments 做临界点合并后 duration 变成浮点)。
+    #   **向上取整**不是四舍五入:少要一秒 = 画面盖不住规划跨度,装配时被拉伸或留黑;
+    #   多要一秒只是多花钱,assemble 会裁掉。宁可多要。
+    dur = str(max(4, math.ceil(float(seg["duration"]) - 1e-6)))
     if t == "mm":
         cmd = [DREAMINA, "multimodal2video"]
         for img in seg["images"]:
@@ -71,7 +76,15 @@ def submit(seg, audio_dir, model=None, res="720p"):
         cmd += ["--prompt", seg["prompt"], "--duration", dur, "--ratio", "9:16",
                 "--model_version", model, "--video_resolution", res, "--poll", "0"]
     else:
-        cmd = [DREAMINA, "image2video", "--image", seg["anchor"],
+        # ★i2v 的画面比例【从输入图推断】,CLI 不接受 --ratio。产品图多是方图 →
+        #   出来就是 960x960,装配硬塞进 1080x1920 只能裁或加黑边,整段废,
+        #   而脚本层面一声不吭(08-11:9 段全中,是用户看即梦后台才发现的)。
+        #   约定:fit_anchor.py 产出的同名 *_916.png 若在,一律优先用。
+        anchor = seg["anchor"]
+        cand = re.sub(r"\.(png|jpg|jpeg)$", "_916.png", anchor, flags=re.I)
+        if cand != anchor and os.path.exists(cand):
+            anchor = cand
+        cmd = [DREAMINA, "image2video", "--image", anchor,
                "--prompt", seg["prompt"], "--duration", dur,
                "--model_version", model, "--video_resolution", res, "--poll", "0"]
     # 提交带退避重试:WSL对即梦偶发瞬时EOF,一枪打空整段就废(07-22实翻车)
