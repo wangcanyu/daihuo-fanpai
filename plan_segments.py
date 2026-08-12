@@ -226,6 +226,14 @@ def merged_form_map(cfg):
                 w.extend(a for a in aliases if a not in w); break
         else:
             fm.append((list(aliases), key))
+    # ★内置 FORM_MAP 是海参品类长出来的(礼盒/单根/参刺…),换品类后 products 里的形态键
+    #   在表上根本没有对应项 → 永远匹配不上、永远退回 hero 兜底。
+    #   至少让每个形态键能匹配【它自己的名字】,这是最低限度的保证(08-11:products 有
+    #   "盒装" 而表里只有 "内包装",23/58 段拿不到产品图)。
+    known = {k for _, k in fm}
+    for key in (cfg.get("products") or {}):
+        if key not in known and key != "hero":
+            fm.append(([key], key))
     return fm
 
 
@@ -299,17 +307,35 @@ def product_actions_only(shots):
     return keep
 
 
-def build_hero_prompt(shots, prod_desc):
+# ★i2v 只吃【一张】锚图,所以提示词里绝不能出现那张图里没有的形态。
+#   product_desc 常常一句话把所有形态都描述一遍("三角皂体…三棱锥纸盒印有…"),
+#   整句贴上去 = 主动指使模型去画一个它没有参考的东西,它只能瞎编
+#   (08-12 张九九 S9:锚图只有泡沫态,提示词却写着纸盒 → 三棱锥被画成长方形纸盒;
+#    h3 腿早先用 form_desc 治好了,即梦腿一直漏着)。
+#   有 form_desc 就只用【本段锚图那一个形态】的描述,并显式禁止编造其他形态。
+NO_OTHER_FORM = "画面中只出现参考图里的这一种产品形态,不要出现任何其他包装、盒子、袋子或容器。"
+
+
+def _form_desc_for(cfg, label, prod_desc):
+    fd = (cfg.get("form_desc") or {}).get(label) if cfg else None
+    return fd or prod_desc
+
+
+def build_hero_prompt(shots, prod_desc, cfg=None, label=None):
     # ★把分镜表的 action 原样带进来(治漏动作),但剔掉主播说话从句
     acts = "；".join(product_actions_only(shots)) or "展示产品"
     colors = shots[0].get("key_colors", "")
-    return (f"{acts}。微距特写,镜头轻微跟随动作,展示{prod_desc}的真实生鲜质感、"
-            f"自然光泽({colors})。真实质感,自然光。画面纯净,不要额外文字,不要Logo水印。")
+    desc = _form_desc_for(cfg, label, prod_desc)
+    return (f"{acts}。微距特写,镜头轻微跟随动作,展示{desc}的真实质感、"
+            f"自然光泽({colors})。{NO_OTHER_FORM}真实质感,自然光。"
+            f"画面纯净,不要额外叠加文字或水印(产品自带的印刷内容必须原样保留)。")
 
 
-def build_package_prompt(shots, prod_desc, anchor_label):
-    return (f"镜头缓慢轻微推近并平移,展示{prod_desc}的{anchor_label},质感高级,"
-            f"放在桌面上,室内柔和灯光。画面纯净,不要额外文字,不要Logo水印。")
+def build_package_prompt(shots, prod_desc, anchor_label, cfg=None):
+    desc = _form_desc_for(cfg, anchor_label, prod_desc)
+    return (f"镜头缓慢轻微推近并平移,展示{desc},质感高级,"
+            f"放在桌面上,室内柔和灯光。{NO_OTHER_FORM}"
+            f"画面纯净,不要额外叠加文字或水印(产品自带的印刷内容必须原样保留)。")
 
 
 def completeness_check(prompt, shots, verbs=None):
@@ -355,20 +381,22 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
                    "anchor_labels": [l for l, _ in anchors],
                    "dialogue": dialogue, "prompt": prompt}
         elif role == "hero":
-            anchor = products.get("hero_alt") or products.get("hero")
-            prompt = build_hero_prompt(shots, prod_desc)
+            lbl = "hero_alt" if products.get("hero_alt") else "hero"
+            anchor = products.get(lbl)
+            prompt = build_hero_prompt(shots, prod_desc, cfg, lbl)
             warns = completeness_check(prompt, shots, verbs)
             seg = {"seg": sid, "type": "i2v", "anchor": anchor, "prompt": prompt}
         elif role == "package":
             anchors, missing = pick_product_anchors(shots, products, form_map)
             label, anchor = anchors[0] if anchors else ("产品", products.get("hero"))
-            prompt = build_package_prompt(shots, prod_desc, label)
+            prompt = build_package_prompt(shots, prod_desc, label, cfg)
             warns = [f"⚠锚图缺失:'{w}'无对应图" for w, _ in missing]
             seg = {"seg": sid, "type": "i2v", "anchor": anchor, "prompt": prompt}
         else:
             anchors, _ = pick_product_anchors(shots, products, form_map)
+            lbl = anchors[0][0] if anchors else "hero"
             anchor = anchors[0][1] if anchors else products.get("hero")
-            prompt = build_hero_prompt(shots, prod_desc)
+            prompt = build_hero_prompt(shots, prod_desc, cfg, lbl)
             seg = {"seg": sid, "type": "i2v", "anchor": anchor, "prompt": prompt}
         # 每段都记连续旁白(hero/包装段也要,装配时铺完整配音轨)
         seg_dialogue = "".join((s.get("dialogue") or "") for s in shots)
