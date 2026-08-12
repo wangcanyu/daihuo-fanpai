@@ -13,6 +13,11 @@ CLI: npx @pippit-dev/cli 安装的 pippit-tool-cli; key 用 XYQ_ACCESS_KEY(confi
 
 作为 gen_segments 的可插拔 i2v/mm/t2v 后端。契约: submit_*(...)->tid ; wait_download(tid,dst)->(size,usage)。
 tid 形如 "thread_id/run_id"(query-result 两个都要)。
+
+★路由硬约束(08-12 复测确认):小云雀【不吃我们的 wav 做口型驱动】——它自己生成音轨。
+  实测生成片音轨 vs 原片音轨 RMS 相关 0.153(07-17 记的 0.159,两次一致;对照 H3 是 0.967)。
+  所以【出镜说话】的片子一律不要派给小云雀,口型必然对不上;它适合无人声/纯产品/
+  空镜类。要音频驱动口型:即梦 multimodal2video 或 H3。
 """
 import json, os, re, shutil, subprocess, tempfile, time
 
