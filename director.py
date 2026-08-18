@@ -141,6 +141,19 @@ RULES = [
             "确实不该出现产品的镜头(如只拍手机),把提示词里的产品字样一并删掉",
     ),
     dict(
+        id="ref_count_cap", name="单段参考图不超过4张",
+        why="RHTV 无线画布工作流笔记的实证经验:『参考越少,一致性越强』——参考超过 2-3 个"
+            "(把服装、鞋子都接进去)一致性明显下降。08-16 小禾家上人设图后,S3/S10 各挂到 5 张"
+            "(4人设图+1产品),已经踩进这个下降区。08-18 三段实测定案:2人设+1产品+1场景板=4 是安全的(背景更准且人物没退),再多要先重跑对照。"
+            "★这条不是拍脑袋定的阈值,是别人烧钱烧出来的经验,别轻易放宽",
+        applies_when=lambda seg, shots: len(seg.get("images") or []) > 4,
+        check_refs=True,
+        fix="砍到 4 张以内(2人设+1产品+1场景板),按这个优先级留:①本段【有台词的说话人】的人设图 "
+            "②本段镜数最多的角色 ③产品图。被砍掉的角色靠文字描述兜底("
+            "『a woman in a floral shirt』这类),不挂图 —— 挂太多图的代价是"
+            "**每一张都变弱**,还不如保证主角那两张够强",
+    ),
+    dict(
         id="no_dialogue_in_h3", name="台词不进 h3 提示词",
         why="08-07 参阿婆:h3 的内容安全审查【只审 prompt 文本】,台词原文/价格词必拒;"
             "口型靠 audioUrls 自带即可",
@@ -178,7 +191,10 @@ def check_segment(seg, shots, prompt, is_h3=False):
         if not applies:
             continue
         # 是否已满足
-        if r.get("needs_prod_img"):               # 查的是参考图构成,不是提示词文本
+        if r.get("check_refs"):                   # 查参考图【张数】,与提示词文本无关
+            n = len(seg.get("images") or [])
+            out.append((r, f"本段挂了 {n} 张参考图(上限4);挂得越多每一张越弱"))
+        elif r.get("needs_prod_img"):             # 查的是参考图构成,不是提示词文本
             prod = [x for x in (seg.get("images") or [])
                     if "host_anchor" not in str(x) and "scene" not in str(x)]
             if not prod:
@@ -216,8 +232,32 @@ def main():
     sl = {str(s["shot_id"]): s for s in json.load(open(a.shotlist))["shots"]}
     # ★检查 h3 提示词时,参考图的真相在 prompts/images.json(那才是喂给模型的清单),
     #   不是 segments.json 里 plan 阶段留下的旧 images
-    if a.prompts_dir and os.path.exists(os.path.join(a.prompts_dir, "images.json")):
-        man = json.load(open(os.path.join(a.prompts_dir, "images.json")))
+    # ★★漂移闸(08-16 血案):`--prompts-dir` 会拿 prompts/ 覆盖 plan 再审 ——
+    #   于是**审的是 prompts/ 那一份,而 gen_segments 生成时读的是 plan 里的 seg["prompt"]**。
+    #   两者不一致时,这道闸会对着一份【不会被使用的提示词】喊"全部通过",
+    #   而生成照常成功、产物照常落盘,只有肉眼看成片才发现用的是上一版。
+    #   08-16 就这样白烧了 17 段(¥10),还差点把"人设图没生效"误判成模型能力不行。
+    #   → 现在只要发现漂移就先报出来:审的和跑的必须是同一份东西。
+    drift = []
+    if a.prompts_dir:
+        man_p = os.path.join(a.prompts_dir, "images.json")
+        man = json.load(open(man_p)) if os.path.exists(man_p) else {}
+        for s in segs:
+            f = os.path.join(a.prompts_dir, f"{s['seg']}_h3.txt")
+            if os.path.exists(f) and open(f).read().strip() != (s.get("prompt") or "").strip():
+                drift.append((s["seg"], "提示词"))
+            if s["seg"] in man and man[s["seg"]] != (s.get("images") or []):
+                drift.append((s["seg"], "锚图"))
+        if drift:
+            byseg = {}
+            for sg, what in drift:
+                byseg.setdefault(sg, []).append(what)
+            print(f"[director][★漂移] {len(byseg)} 段的 {a.prompts_dir}/ 与 {a.plan} 不一致:")
+            for sg, w in list(byseg.items())[:8]:
+                print(f"    {sg}: {'、'.join(w)} 不同")
+            print(f"  ★**gen_segments 读的是 {a.plan} 里的 prompt/images,不读 {a.prompts_dir}/**\n"
+                  f"    照这样跑,生成用的会是 plan 里的【旧】提示词,而且全程不报错。\n"
+                  f"    修:重跑 h3_prompt.py(默认会灌回 plan),或确认你真的要用 plan 里那版。\n")
         for s in segs:
             if s["seg"] in man:
                 s["images"] = man[s["seg"]]

@@ -13,7 +13,7 @@ make_host.py — 生成主播/场景锚图(即梦 text2image 5.0 @2k,订阅内�
   python3 make_host.py --prompt "25岁左右中国女生,…" --out assets/host_anchor.png [--upscale 4k]
   python3 make_host.py --batch hosts.json          # {"路径": "提示词", …} 批量
 """
-import argparse, json, os, re, subprocess, sys, urllib.request
+import argparse, json, os, re, subprocess, sys, time, urllib.request
 
 DREAMINA = os.path.expanduser("~/.local/bin/dreamina")
 TAIL = "画面干净,不要任何文字、logo或水印。"
@@ -32,11 +32,32 @@ def _dl(url, dst):
     return os.path.getsize(dst)
 
 
-def gen(prompt, out, ratio="9:16", res="2k", model="5.0", upscale=None):
+# ★瞬时失败(不是内容被拒,也不是没额度)—— 原样重试即可。
+#   08-15 批量建人设图时撞到 `authsdk: refresh failed: protocol transport: do request`,
+#   而同一条 prompt 直接用 CLI 重跑立刻就成了,`user_credit` 也一直正常(238分/maestro)。
+#   即:token 是好的,是刷新那一跳抖了。批量跑 8 张时中途抖一次就断整批,必须自愈。
+TRANSIENT = ("authsdk", "refresh failed", "protocol transport", "do request",
+             "timeout", "connection reset", "EOF", "502", "503", "504")
+
+
+def _transient(txt):
+    t = (txt or "").lower()
+    return any(w.lower() in t for w in TRANSIENT)
+
+
+def gen(prompt, out, ratio="9:16", res="2k", model="5.0", upscale=None, tries=4):
     os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
-    txt = _run([DREAMINA, "text2image", "--prompt", prompt + TAIL, "--ratio", ratio,
-                "--resolution_type", res, "--model_version", model, "--poll", "90"])
-    m = re.search(r'"image_url"\s*:\s*"([^"]+)"', txt)
+    m, txt = None, ""
+    for i in range(tries):
+        txt = _run([DREAMINA, "text2image", "--prompt", prompt + TAIL, "--ratio", ratio,
+                    "--resolution_type", res, "--model_version", model, "--poll", "90"])
+        m = re.search(r'"image_url"\s*:\s*"([^"]+)"', txt)
+        if m or not _transient(txt) or i == tries - 1:
+            break
+        nap = 10 * (i + 1)
+        print(f"  …瞬时故障,{nap}s 后原样重试({i+1}/{tries-1}): {txt[-90:].strip()}",
+              file=sys.stderr)
+        time.sleep(nap)
     if not m:
         raise RuntimeError(f"生成无 image_url: {txt[-200:]}")
     size = _dl(m.group(1), out)
