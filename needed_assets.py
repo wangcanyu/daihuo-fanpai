@@ -6,10 +6,15 @@ needed_assets.py — 反推后,自动列出"这条视频需要你准备哪些产
 所有产品/包装形态 → 告诉用户照单准备图片 + 生成 assets.json 骨架(键留空待填)。
 避免"漏某个形态→即梦自由发挥编产品"(实测踩过的坑)。
 
+★08-13 补上【人物】那一半:这个脚本原先只问"要哪些产品图",从不读 person 字段,
+  所以它永远不会说"这条片有 N 个反复出现的人物,你需要 N 张人设图"。
+  小禾家因此 17 段里 16 段一张人脸都没挂 → 切镜变脸。产品会编,人一样会编。
+
 用法: python3 needed_assets.py shotlist.json [--out assets.skeleton.json]
 """
 import argparse, json, os
 from plan_segments import FORM_MAP   # 复用同一套形态映射,保证与规划一致
+from cast_plan import cluster, split_roles, lib_index, match_lib   # 人物聚类复用同一套
 
 FORM_DESC = {
     "礼盒": "礼盒/礼品袋(整盒外包装,深色带品牌字)",
@@ -34,12 +39,14 @@ def analyze(shotlist_path, out_path):
                     forms.append(key)
                 evidence.setdefault(key, []).append(f"镜{s.get('shot_id')}")
     print("===== 这条视频需要你准备的产品图 =====")
+    # ★别在这里 return:没有产品形态不代表没有人物,纯口播片照样需要人设图(08-13 补)
     if not forms:
-        print("  (没检出明确产品形态,可能是纯口播/无产品视频)"); return
+        print("  (没检出明确产品形态,可能是纯口播/无产品视频)")
     for k in forms:
         print(f"  ▶ {FORM_DESC.get(k, k)}")
         print(f"      (出现在 {', '.join(evidence[k][:6])})")
     print("\n提示:官方电商图/白底图最佳,别用目标视频的截图(低清且带原品牌)。")
+    cast = _cast_needed(sl.get("shots", []))
     # assets.json 骨架
     skeleton = {"host_anchor": "(主播锚定图;纯产品无人视频可留空)",
                 "product_desc": "(你的产品一句话,材质/颜色写死,如:XX鲜蒸海参,深蓝金色包装)",
@@ -47,6 +54,32 @@ def analyze(shotlist_path, out_path):
     out_path = out_path or os.path.join(os.path.dirname(os.path.abspath(shotlist_path)), "assets.skeleton.json")
     json.dump(skeleton, open(out_path, "w"), ensure_ascii=False, indent=2)
     print(f"\n已生成待填骨架 → {out_path}(把括号换成你的图片路径即可)")
+
+
+def _cast_needed(shots, min_shots=2):
+    """反复出现的人物 → 每人一张人设图。★只报 >=2 镜的:只露一次的路人不值得建资产,
+    人物一致性问题只在【跨镜】才存在。返回聚类结果供骨架落盘。"""
+    frags = []
+    for s in shots:
+        frags += split_roles(s.get("person"))
+    groups = cluster(frags)
+    idx = lib_index()
+    rows = []
+    for key, members in sorted(groups.items(), key=lambda kv: -sum(n for _, n in kv[1])):
+        total = sum(n for _, n in members)
+        if total < min_shots:
+            continue
+        rows.append((key, total, match_lib(key, idx)))
+    print("\n===== 这条视频需要你准备的人设图(3:4 上排三肖像+下排三全身) =====")
+    if not rows:
+        print("  (没检出跨镜复现的人物)")
+        return []
+    for key, total, cand in rows:
+        print(f"  ▶ {key}  ×{total} 镜" + (f"   ← 资产库已有 {cand}" if cand else "   ← 需新建"))
+    print("  ★规格是 08-13 A/B/C/C2 四版实测出来的:单张正面锚图会让 H3 出重影(B 版),"
+          "横排六视角会把人画老、画暗(C 版);3:4 肖像+全身三视角才对(C2 版)。")
+    print("  ★确认这份表后跑 cast_plan.py --out cast.json,h3_prompt 会自动绑定。")
+    return rows
 
 
 def _hit(shot):

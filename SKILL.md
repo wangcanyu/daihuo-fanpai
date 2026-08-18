@@ -104,6 +104,23 @@ python3 <engine>/doctor.py
           `--hard-max-cuts`**(不设闸会把9个镜头塞一段,超即梦"硬切5崩"红线和h3已验的3刀)。
           本片实测:10段50s → 8段42s,浪费39%→28%。默认 --min-dur 0 = 旧行为不变。
         → ★人审 run/segments.md:看分镜卡片 + 完备性关卡的"漏动作"警告,微调提示词/锚图/台词
+2.3 ★演职表与资产(群戏/街采片必做;单主播片跳过)
+        python3 needed_assets.py run/shotlist.json        # 报"要哪些产品图 + 哪些人设图"
+        python3 cast_plan.py run/shotlist.json --out run/cast.json   # 聚出角色候选
+        → ★**人过目 cast.json**:聚类是关键词匹配,可能把两个人合成一个(别名宁窄勿宽,
+          合错=两个不同的人共用一张脸,比没有人设图更糟)。拿不准就回原片抽帧看,一条 ffmpeg 定案。
+        → 单主播口播/vlog 会被 cast_plan 的"单主播片闸"拦下并提示不要建演职表(多日换装会被聚成假角色)
+        python3 make_cast_sheet.py --batch cast_todo.json  # 生成 3:4 人设图入资产库(即梦订阅内免费)
+        → 规格是 08-13 A/B/C/C2 实测定的:3:4 上排三肖像+下排三全身,灰底影棚。
+          单张正面锚图会出重影,横排六视角会把人画老画暗 —— 别自己改规格。
+
+2.4 ★说话人标注(有画外旁白的片必做)
+        python3 speaker_tag.py run/目标.mp4 --shotlist run/shotlist.json --cast run/cast.json
+        → 逐句判 voiceover/onscene/mixed + 说话人。**一次看全片且带音轨**(判旁白靠音色贯穿)。
+        → ★人审那张对照表(带★的是信心非"高"的);归不上册的说话人会单独列出来交你定夺。
+        → 确认后 --apply 写回 shotlist 的 speaker/voice_mode。
+        → 不做这步的后果:旁白镜里所有人都在对着画外音张嘴(小禾家 44 个台词镜里 15 个是旁白)。
+
 2.5 h3提示词(走 h3 腿时需要:mmh3 或 rh)
         python3 h3_prompt.py run/segments.json --shotlist run/shotlist.json --assets assets.json --out-dir run/prompts
         → plan 出的是【即梦风格中文提示词】,h3 吃不了 → 本步转成官方 Ref2VA 六段式:
@@ -112,7 +129,11 @@ python3 <engine>/doctor.py
           中文动作用 Ark 一次批量译英(--no-translate 可关,留中文由 agent 润色)。
         → 敏感词**只报警不自动改**:h3 拒稿不计费,先按原样试,被拒再消毒
           (08-09 教训:预防性把"针管"改成"美妆工具柄",道具直接走形,钩子废了)
-        → 产物 prompts/<seg>_h3.txt + images.json,人过一遍再喂 gen_segments
+        → 产物 prompts/<seg>_h3.txt + images.json,**并自动灌回 segments.json**
+          (★gen_segments 只读 plan 里的 prompt/images,从不读 prompts/ ——
+           08-16 就因为没灌回,拿旧提示词白跑了一整轮 17 段而全程不报错)
+        → 单段参考图自动限流到 3 张(RHTV 实证:参考越多一致性越弱),
+          优先保住【有台词的说话人】的人设图 + 1 张产品图
 2.8 ★约束闸  python3 director.py run/segments.json --shotlist run/shotlist.json [--prompts-dir run/prompts] [--strict]
         → **生成前的最后一道闸,别带着缺失去烧钱**。它检查的不是"提示词写得漂不漂亮",
           而是"某个必须的约束在不在"——统计全部翻车案例,**没有一条是表达问题,全是约束缺席**。
