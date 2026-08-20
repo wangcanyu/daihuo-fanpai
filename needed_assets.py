@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-needed_assets.py — 反推后,自动列出"这条视频需要你准备哪些产品形态图"
+needed_assets.py — 反推后,列出这条片要哪些资产,并**分清谁来准备**
 
 读 shotlist.json,扫每镜 product_in_frame/action,按 FORM_MAP 归出目标视频用到的
 所有产品/包装形态 → 告诉用户照单准备图片 + 生成 assets.json 骨架(键留空待填)。
@@ -38,14 +38,14 @@ def analyze(shotlist_path, out_path):
                 if key not in forms:
                     forms.append(key)
                 evidence.setdefault(key, []).append(f"镜{s.get('shot_id')}")
-    print("===== 这条视频需要你准备的产品图 =====")
+    print("═══ 【要你准备】产品图 ═══  (AI 编不出你的真品;h3 还画不对汉字,带印刷文字的包装只能用真图)")
     # ★别在这里 return:没有产品形态不代表没有人物,纯口播片照样需要人设图(08-13 补)
     if not forms:
         print("  (没检出明确产品形态,可能是纯口播/无产品视频)")
     for k in forms:
         print(f"  ▶ {FORM_DESC.get(k, k)}")
         print(f"      (出现在 {', '.join(evidence[k][:6])})")
-    print("\n提示:官方电商图/白底图最佳,别用目标视频的截图(低清且带原品牌)。")
+    print("  提示:官方电商图/白底图最佳,别用目标视频的截图(低清且带原品牌)。")
     cast = _cast_needed(sl.get("shots", []))
     # assets.json 骨架
     skeleton = {"host_anchor": "(主播锚定图;纯产品无人视频可留空)",
@@ -70,15 +70,19 @@ def _cast_needed(shots, min_shots=2):
         if total < min_shots:
             continue
         rows.append((key, total, match_lib(key, idx)))
-    print("\n===== 这条视频需要你准备的人设图(3:4 上排三肖像+下排三全身) =====")
+    print("\n═══ 【AI 生成,你审】人物 ═══  (铁律:一律生成新身份,绝不照搬原片出镜人的肖像)")
     if not rows:
         print("  (没检出跨镜复现的人物)")
         return []
     for key, total, cand in rows:
         print(f"  ▶ {key}  ×{total} 镜" + (f"   ← 资产库已有 {cand}" if cand else "   ← 需新建"))
-    print("  ★规格是 08-13 A/B/C/C2 四版实测出来的:单张正面锚图会让 H3 出重影(B 版),"
-          "横排六视角会把人画老、画暗(C 版);3:4 肖像+全身三视角才对(C2 版)。")
-    print("  ★确认这份表后跑 cast_plan.py --out cast.json,h3_prompt 会自动绑定。")
+    print("  ★你要做的只有一件事:**过目这份角色表**——聚类是关键词匹配,可能把两个人"
+          "合成一个(合错=两人共用一张脸,比没有人设图更糟)。拿不准回原片抽帧看。")
+    print("  ★确认后:cast_plan.py --out cast.json → make_cast_sheet.py --batch(AI 出图,"
+          "即梦订阅内免费) → h3_prompt 自动绑定。规格由 08-13 A/B/C/C2 实测定,别改。")
+    print("\n═══ 【AI 生成】场景 ═══  跑 scene_plan.py + make_scene.py(同样只需你过目)")
+    print("═══ 【看情况】道具 ═══  带品牌/特定外观的(你的包装盒、印字物料)→ 你准备;"
+          "通用道具(毛巾/水盆/镜子)→ 不做资产,模型本来就画得对")
     return rows
 
 
