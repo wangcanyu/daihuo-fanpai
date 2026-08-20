@@ -114,6 +114,17 @@ python3 <engine>/doctor.py
         → 规格是 08-13 A/B/C/C2 实测定的:3:4 上排三肖像+下排三全身,灰底影棚。
           单张正面锚图会出重影,横排六视角会把人画老画暗 —— 别自己改规格。
 
+2.35 ★资产审片台(本地网页,把"看不见"的那一关变成看得见)
+        python3 asset_board.py --run run/ --out board.html   # 自包含 HTML,双击即开,不联网
+        → 三栏与 needed_assets 同口径:【要你准备】产品 /【AI生成·你审】人物、场景
+        → 人物卡 = 原片截图×3 + 已生成的人设图【并排】,一眼判断"是不是同一个人"
+          (08-15 差点把「黑短袖大哥」和「黑背心运动大哥」绑成同一张脸,就是这种判断)
+        → 页面上改名/改描述/勾确认 → 点「导出决策 JSON」→ 放回 run 目录
+        python3 apply_board.py --run run/                    # 写回 cast.json + 资产库
+        → ★标了"其实是别人,拆开"的**不自动处理**:拆成谁和谁是语义判断,猜错比不拆更糟
+        ★为什么是本地文件不是云端页面:用户网络不稳时 claude.ai 打不开(08-20 实撞:
+          连 GitHub 直连都连不上,要靠代理)。本地 HTML 离线可用,是这个工具的主场。
+
 2.4 ★说话人标注(有画外旁白的片必做)
         python3 speaker_tag.py run/目标.mp4 --shotlist run/shotlist.json --cast run/cast.json
         → 逐句判 voiceover/onscene/mixed + 说话人。**一次看全片且带音轨**(判旁白靠音色贯穿)。
