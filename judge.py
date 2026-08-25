@@ -9,8 +9,13 @@ judge.py — 评委(三看漏斗 90分制,生成后打分)
 import argparse, base64, json, os, re, subprocess, tempfile, time
 import requests
 
-ARK_URL = "https://ark.cn-beijing.volces.com/api/v3/responses"
+# ★端点必须从 config.ark_endpoint() 取,别硬编码 /api/v3。
+#   08-22 切套餐时只把【key】换成了 ark_endpoint()[1],URL 还钉在按量口子上,
+#   而 ARK_SEED_MODEL 已经跟着计费口子变成了套餐里的 turbo —— 套餐 key + 套餐模型名
+#   打到按量 URL 上,轻则 401 重则计费口子对不上。**换端点要连 URL 一起换。**
 from config import ark_key, ARK_SEED_MODEL as ARK_MODEL
+from config import ark_endpoint
+ARK_URL = ark_endpoint()[0].rstrip("/") + "/responses"
 
 MAX_UPLOAD_MB = 35   # base64 上传上限的安全线,超了自动压小版再评(实测 >40MB 会被拒)
 
@@ -38,7 +43,7 @@ def call(video_paths, prompt, timeout=400):
     """video_paths: 一个路径或路径列表(实测 Ark 支持一次传多个视频,可做真对比)。"""
     if isinstance(video_paths, str):
         video_paths = [video_paths]
-    key = ark_key()
+    key = ark_endpoint()[1]
     budget = MAX_UPLOAD_MB // len(video_paths)  # 合并预算均分,防双视频超限断连
     content = []
     for vp in video_paths:

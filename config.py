@@ -11,6 +11,53 @@ CosyVoice 位置:环境变量 COSYVOICE_HOME,默认 ~/CosyVoice
 import os
 
 
+# ★火山有两条计费口子,端点【不同】,key 也【不通用】(08-22 实测 401):
+#   - 控制台按量  base = .../api/v3        key = ARK_API_KEY(ark-xxx)
+#   - Agent Plan  base = .../api/plan/v3   key = 该套餐专属 key(ARK_PLAN_KEY)
+#   套餐里【没有 seed-2-1-pro,只有 turbo】—— 切过去是 Pro→turbo 的模型降级,
+#   不只是换个计费口子。切之前先跑质量对照(见 HANDOFF「反推的钱与端点」)。
+ARK_PLAN_BASE = os.environ.get("ARK_PLAN_BASE",
+                               "https://ark.cn-beijing.volces.com/api/plan/v3")
+ARK_PLATFORM_BASE = os.environ.get("ARK_BASE_URL",
+                                   "https://ark.cn-beijing.volces.com/api/v3")
+
+
+def ark_use_plan():
+    """是否走套餐:显式 DAIHUO_ARK_PLAN=1,或配了 ARK_PLAN_KEY。
+    ★DAIHUO_ARK_PLAN=0 是【显式退回按量】的逃生口(08-25 补)。
+      原来只要 key 文件在就强制走套餐,没有退路 —— 而套餐会 429 限流,
+      翻译几个短句这种小活被卡死时,按量只要几厘钱。
+      ⚠别拿它去跑整片视频理解:那才是上百块的地方,那个必须走套餐。"""
+    v = os.environ.get("DAIHUO_ARK_PLAN", "").strip().lower()
+    if v in ("1", "true", "yes"):
+        return True
+    if v in ("0", "false", "no"):
+        return False
+    return bool(plan_key(soft=True))
+
+
+def plan_key(soft=False):
+    k = os.environ.get("ARK_PLAN_KEY")
+    if k and k.strip():
+        return k.strip()
+    p = os.path.expanduser("~/.config/daihuo-fanpai/ark_plan_key")
+    if os.path.exists(p):
+        return open(p).read().strip()
+    if soft:
+        return None
+    raise RuntimeError("未找到 Agent Plan key。`export ARK_PLAN_KEY=...` 或写入 "
+                       "~/.config/daihuo-fanpai/ark_plan_key;"
+                       "取 key:arkcli auth apikey(交互) 或 arkcli plans personal "
+                       "rotate-apikey(★会立即作废旧 key,别的机器在用就别转)")
+
+
+def ark_endpoint():
+    """返回 (base_url, key, 走的是哪条口子) —— 反推/评委统一从这里取,别再各自硬编码。"""
+    if ark_use_plan():
+        return ARK_PLAN_BASE, plan_key(), "agent-plan"
+    return ARK_PLATFORM_BASE, ark_key(), "platform(按量)"
+
+
 def ark_key():
     k = os.environ.get("ARK_API_KEY")
     if k and k.strip():
@@ -155,7 +202,13 @@ COSYVOICE_HOME = os.environ.get("COSYVOICE_HOME", os.path.expanduser("~/CosyVoic
 
 # 反推/评委用的 Seed 模型:公共模型名直调(实测可用),不再依赖私人 endpoint ID(ep-xxx)。
 # 换模型/换 endpoint 用环境变量覆盖,不改代码。
-ARK_SEED_MODEL = os.environ.get("ARK_SEED_MODEL", "doubao-seed-2-1-pro-260628")
+# ★默认模型必须跟着【计费口子】走 —— 套餐里没有 pro,只有 turbo。
+#   08-22 实撞:配好 plan key 后路由自动切套餐,而默认模型还是 pro,
+#   下一次反推会直接失败。显式 ARK_SEED_MODEL 永远优先。
+ARK_MODEL_PLATFORM = "doubao-seed-2-1-pro-260628"     # 按量:Pro(贵,准)
+ARK_MODEL_PLAN = "doubao-seed-2-1-turbo-260628"       # 套餐:只有 turbo
+ARK_SEED_MODEL = (os.environ.get("ARK_SEED_MODEL")
+                  or (ARK_MODEL_PLAN if ark_use_plan() else ARK_MODEL_PLATFORM))
 
 # 成片下载代理:全管线(火山/即梦/即梦CDN)均为国内直连,默认不走代理。
 # 极少数网络环境下载 CDN 需代理时,设 DAIHUO_DOWNLOAD_PROXY=http://127.0.0.1:7896。

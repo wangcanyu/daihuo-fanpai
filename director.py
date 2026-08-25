@@ -44,8 +44,16 @@ RULES = [
         applies_all=[
             ["左右", "两条", "两只", "另一条", "另一半", "单侧", "腿", "手"],       # 部位/两侧
             ["对比", "差异", "正版", "盗版", "真假", "假货", "未洗", "没洗",
-             "洗过", "搓过", "一半", "分别持", "肤色差"],                          # 对比语义
+             "洗过", "搓过", "分别持", "肤色差"],                                  # 对比语义
         ],
+        # ★"一半"从对比语义词里摘掉(08-20 榴莲千层):吃播类里"蛋糕剩余约一半"必然出现,
+        #   配上任意一个"手"字就误报。原始事故(08-11 锦鲤)命中的是"对比/变白",不靠"一半",
+        #   所以摘掉它不削弱那条。改成:只有"一半"和【身体部位】贴在一起才算对比语义
+        #   —— 一条只会喊狼来了的闸,比没有闸更糟(规则自己的注释就写着这句)。
+        applies_extra=lambda seg, shots, src: (
+            "一半" not in src or
+            bool(re.search(r"(左|右|另)一半|一半[^,，。;；]{0,4}(手|腿|脸|胳膊|小臂)"
+                           r"|(手|腿|脸|胳膊|小臂)[^,，。;；]{0,4}一半", src))),
         present_kw=["左手", "右手", "左腿", "右腿", "left hand", "right hand",
                     "left leg", "right leg", "side assignment", "never swap"],
         fix="加:『用【左手】持产品施力,被处理、被展示的【始终是右手】;每个阶段都是 "
@@ -154,6 +162,20 @@ RULES = [
             "**每一张都变弱**,还不如保证主角那两张够强",
     ),
     dict(
+        id="prompt_len_cap", name="提示词不超过 7000 字符",
+        why="08-21 榴莲千层:加了逐秒口型时间轴后 S1/S6/S7 提交被拒 —— "
+            "h3 硬限制 `prompt 不能超过 7000 个字符 (2013)`。首版把每个轮次都写成完整句子"
+            "(operator 那句 165 字符重复 29 遍)直接撑爆。**压缩靠'规则说一遍+逐行只留代号',"
+            "不是靠删信息**;压完同样的信息只占四分之一。"
+            "★这是提交期才报的错,不查就是白等一轮网络往返",
+        h3_only=True,
+        applies_when=lambda seg, shots: True,
+        check_len=7000,
+        present_kw=[],
+        fix="压缩提示词:重复的整句改成'开头定义一次代号+逐行只写代号';"
+            "合并相邻同类的时间轴行;真压不下去就减少该段的镜头数",
+    ),
+    dict(
         id="no_dialogue_in_h3", name="台词不进 h3 提示词",
         why="08-07 参阿婆:h3 的内容安全审查【只审 prompt 文本】,台词原文/价格词必拒;"
             "口型靠 audioUrls 自带即可",
@@ -161,6 +183,70 @@ RULES = [
         applies_when=lambda seg, shots: bool((seg.get("dialogue") or "").strip()),
         present_kw=[], forbid_text=lambda seg: (seg.get("dialogue") or "")[:12],
         fix="把台词原文从提示词里删掉(h3_prompt 已自动剥;手写提示词时最容易忘)",
+    ),
+    dict(
+        id="self_contradiction", name="同一份提示词里不许自相矛盾",
+        why="★本项目的头号病,到 08-22 已经第 9 次出现。形态永远一样:一句话禁止 X,"
+            "另一句话又正面要求 X —— **模型只会挑一句听,而且经常挑错那句**。"
+            "历史:换装/包装文字/旁白镜说话/秒表/盘子。08-22 榴莲千层复盘,一条片同时中 5 种:"
+            "①产品定义『原样复现图里的一切』⇄『不要盘子/咖啡豆/碎屑』(而图里三样都有) 8/8 段;"
+            "②场景定义『远处有零星行人、路过的行人』⇄『背景路人无可辨认脸』 8/8 段 —— "
+            "  这就是撞脸的真根因:那些行人**没有身份来源**,模型只能拿仅有的人设图去复制;"
+            "③场景定义『亮灯的商铺招牌』⇄『不得出现任何可读文字』 5/8 段(成片生成了『CUE创业TV』);"
+            "④summary『手举着显示0:00的计时器』⇄『本段不出现计时器』 4/8 段"
+            "  (_strip_timer 只剥了 detailed_description,summary 那一份漏了);"
+            "⑤动作『双手举着白色带红色标识的纸碗包装』⇄『do not show any paper bowl』——"
+            "  为了躲开『h3 画不出汉字』把这镜最主要的道具整个禁掉了,躲的方式就错了:"
+            "  该约束的是【桶上不许有字】,不是【不许有桶】。"
+            "★正确修法永远是**把打架的那句删掉、或改掉源头(图/资产描述)**,"
+            "  绝不是再加一句更强的约束 —— 加约束只会让打架的句子更多",
+        applies_when=lambda seg, shots: True,
+        present_kw=[],
+        check_contradict=[
+            # (名字, 禁令句正则, 正面要求正则)
+            ("盘子/餐具", r"no plates|不要盘子|without any plate",
+             r"\bon a plate\b|盘子|装盘|plated"),
+            ("咖啡豆/碎屑", r"no coffee beans|不要咖啡豆|no chocolate crumbs|不要巧克力碎屑",
+             r"coffee bean|咖啡豆|chocolate crumb|巧克力碎屑"),
+            # ★"not visible in <Picture N>" 是**条件句**不是禁令 —— 段里挂了纸桶参考图时
+            #   它和"举着纸碗包装"完全自洽。把它当禁令会误报,而喊狼来了的闸比没有闸更糟。
+            ("包装/纸碗", r"do not show any paper bowl|no paper bowl|不要任何包装",
+             r"paper bowl|纸碗|纸桶|包装盒|printed packaging"),
+            ("计时器/秒表", r"countdown timer is NOT|no stopwatch|不出现计时器",
+             r"计时器|倒计时|秒表|读秒|\bstopwatch\b|\btimer\b(?! is NOT)"),
+            # ★必须带【背景/远处/周围】这类限定词才算。裸的"路人"在这类片里往往指
+            #   **出镜的主角本人**("向迎面走来的三位女性路人递出"),按裸词判会误报。
+            ("背景路人", r"no recognisable face|background passers-by stay far away",
+             r"背景[^,\uFF0C。]{0,6}(行人|路人)|远处[^,\uFF0C。]{0,6}(行人|路人)|"
+             r"路过的行人|周围路人|围观|background pedestrian|passing pedestrian"),
+            ("可读文字/招牌", r"no readable Chinese characters|no subtitles",
+             r"招牌|店招|字样|标牌|广告牌|灯箱|signage|shop sign"),
+            ("旁白镜说话", r"keeps a closed, relaxed mouth|do not animate any talking",
+             r"说话|张嘴|张口"),
+            # ★08-23 第 10 次:提示词里同时有【逐秒口型时间轴】和【逐镜"这一镜是谁在说"】。
+            #   时间轴说 11.3/14 秒是画外的人在说,逐镜那句把整段音轨派给周周对口型 ——
+            #   成片里女主全程在说拍摄者的台词。有时间轴时,口型只能由时间轴一个地方发。
+            ("逐镜口型⇄时间轴", r"speech_timeline — who may open",
+             r"is the one speaking in this shot|at the centre of frame is the one speaking"),
+        ],
+        fix="不要加更强的约束 —— 找到那句正面要求 X 的话,删掉它;"
+            "如果它来自资产描述或参考图(如图里真有盘子),就去改资产,别在提示词里对着图否认",
+    ),
+    dict(
+        id="headcount_match", name="声明的出镜人数要和画面描述的人数对得上",
+        why="★08-22 榴莲千层 S1 实撞,而且**这一条直接毁脸**:"
+            "`Cast constraint (hard): exactly <Subject 1>, <Subject 2>`(就两个人) "
+            "⇄ 同一份提示词的动作写着 `extends it to three approaching female passersby`(三个人)。"
+            "成片里主角左右各站一个黑衣女生,**两张脸都被糊成一团、还互为镜像** —— "
+            "模型被要求同时满足 2 和 3,只能把第 2 个人复制一份再毁掉。"
+            "★根子在资产层:profile 认出三个人,cast.json 只有两个(第三个在审片台被标了"
+            "『不建资产』)。**画面里出现了没有身份来源的人,这就是撞脸/毁脸的通用机制。**"
+            "★所以这条闸真正在查的是:**你打算让几个人出镜,就得给几张人设图**",
+        applies_when=lambda seg, shots: True,
+        present_kw=[],
+        check_headcount=True,
+        fix="要么给缺的那个人补一张人设图(make_cast_sheet)并加进 cast.json,"
+            "要么改写动作描述让人数与在册角色一致 —— 但**不要两句话就这么放着**",
     ),
 ]
 
@@ -182,6 +268,9 @@ def check_segment(seg, shots, prompt, is_h3=False):
         # 是否适用
         if r.get("applies_all"):
             applies = all(any(k in src for k in grp) for grp in r["applies_all"])
+            # ★额外收紧条件(某些词在别的语境里是另一个意思,见规则注释)
+            if applies and r.get("applies_extra"):
+                applies = bool(r["applies_extra"](seg, shots, src))
         elif r.get("applies_when"):
             applies = bool(r["applies_when"](seg, shots))
         elif r.get("applies_re"):
@@ -191,7 +280,44 @@ def check_segment(seg, shots, prompt, is_h3=False):
         if not applies:
             continue
         # 是否已满足
-        if r.get("check_refs"):                   # 查参考图【张数】,与提示词文本无关
+        if r.get("check_headcount"):              # 查【声明人数】⇄【描述人数】
+            m = re.search(r"Cast constraint \(hard\):\s*exactly (.+?) are the on-camera", p)
+            if m:
+                declared = len(re.findall(r"<Subject \d+>", m.group(1)))
+                NUM = {"two": 2, "three": 3, "four": 4, "five": 5, "\u4e24": 2, "\u4e8c": 2,
+                       "\u4e09": 3, "\u56db": 4, "\u4e94": 5}
+                said = 0
+                for w, v in NUM.items():
+                    # 必须紧跟人称词,否则 "three seconds" 之类会误报
+                    # ★英文里数词和人称词之间常隔着修饰语("three **approaching** female
+                    #   passersby") —— 只认紧邻会漏报,而这条闸漏报的代价是毁脸(S1 实撞)。
+                    #   放宽到中间最多 2 个词,人称词仍然必须有。
+                    if re.search(w + r"\s*(\u4f4d|\u4e2a|\u540d)?\s*(?:[A-Za-z]+\s+){0,2}"
+                                 r"(\u5973\u6027|\u8def\u4eba|\u5973\u751f|\u4eba|female|women|woman|"
+                                 r"people|person|passersby|passers-by|girl)", p, re.I):
+                        said = max(said, v)
+                if said > declared:
+                    out.append((r, f"声明出镜 {declared} 人(Cast constraint),"
+                                   f"但描述里写着 {said} 人 —— 多出来的人没有身份来源,"
+                                   f"模型会复制现有人物的脸去填(实测会糊)"))
+        elif r.get("check_contradict"):           # 查【同一份提示词内部】自相矛盾
+            for nm, ban_re, want_re in r["check_contradict"]:
+                lines = [x.strip() for x in re.split(r"[\n]|(?<=[.。;\uFF1B])\s+", p) if x.strip()]
+                bans = [x for x in lines if re.search(ban_re, x, re.I)]
+                if not bans:
+                    continue
+                # ★正面句必须【不是禁令句本身】—— 禁令句里天然含关键词("no plates" 含 plate),
+                #   不排掉就每条都误报,而喊狼来了的闸比没有闸更糟(08-20 已栽过一次)
+                wants = [x for x in lines
+                         if re.search(want_re, x, re.I) and not re.search(ban_re, x, re.I)]
+                if wants:
+                    out.append((r, f"『{nm}』自相矛盾 —— 禁令:「{bans[0][:46]}…」"
+                                   f" ⇄ 却又要求:「{wants[0][:46]}…」"))
+        elif r.get("check_len"):                  # 查提示词【长度】,超了提交期才报错,太晚
+            n = len(p)
+            if n > r["check_len"]:
+                out.append((r, f"提示词 {n} 字符,超过 {r['check_len']} 上限 {n-r['check_len']} 字符"))
+        elif r.get("check_refs"):                 # 查参考图【张数】,与提示词文本无关
             n = len(seg.get("images") or [])
             out.append((r, f"本段挂了 {n} 张参考图(上限4);挂得越多每一张越弱"))
         elif r.get("needs_prod_img"):             # 查的是参考图构成,不是提示词文本

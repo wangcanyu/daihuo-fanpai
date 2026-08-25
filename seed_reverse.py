@@ -17,7 +17,10 @@ seed_reverse.py — 带货短视频反推引擎 (Doubao Seed 2.1 Pro 原生视�
 import argparse, base64, json, os, re, subprocess, sys, time
 import requests
 
-ARK_URL   = "https://ark.cn-beijing.volces.com/api/v3/responses"
+# ★别硬编码端点:按量与套餐的 base_url 不同(见 config.ark_endpoint)
+from config import ark_endpoint as _ark_ep
+from config import ark_endpoint
+ARK_URL   = _ark_ep()[0].rstrip("/") + "/responses"
 from config import ARK_SEED_MODEL as ARK_MODEL   # 公共模型名,可用环境变量 ARK_SEED_MODEL 覆盖
 from config import ark_key
 NO_PROXY  = {"http": None, "https": None}     # 火山国内 endpoint,绝不走代理
@@ -49,6 +52,23 @@ SCHEMA = """{
    "key_colors": "画面关键物体颜色,尤其液体/产品颜色(这个字段帮你别漏爆点细节)"
  }]
 }"""
+
+
+def _stamp(d):
+    """★把【是谁产出的】写进产物本身(08-22 加)。
+    起因:用户问"反推到底用的 Pro 还是 turbo",我只能靠"配置没被改过"去【推断】——
+    而产物自己不记录。这类"靠推断不靠记录"的地方正是本项目反复吃亏的形状。
+    以后换 endpoint/换套餐/换模型,回头看产物就能知道它是哪一版跑出来的。"""
+    import datetime, os as _os
+    from config import ARK_SEED_MODEL as _m, ark_endpoint as _ep
+    _base, _k, _how = _ep()          # ★记【实际走的】口子,不是环境变量的默认值
+    d["_meta"] = {"model": _m,
+                  "endpoint": _base,
+                  "billing": _how,   # platform(按量) / agent-plan(套餐)
+                  "profile": _os.environ.get("ARKCLI_PROFILE", "(未记录)"),
+                  "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                  "by": _os.path.basename(__file__)}
+    return d
 
 
 def run(cmd):
@@ -99,7 +119,7 @@ def _ark_json(content, timeout=300):
     from config import ark_key, ARK_SEED_MODEL
     body = {"model": ARK_SEED_MODEL, "thinking": {"type": "disabled"}, "stream": True,
             "input": [{"role": "user", "content": content}]}
-    r = requests.post(ARK_URL, headers={"Authorization": f"Bearer {ark_key()}",
+    r = requests.post(ARK_URL, headers={"Authorization": f"Bearer {ark_endpoint()[1]}",
                       "Content-Type": "application/json"},
                       json=body, proxies={"http": None, "https": None},
                       timeout=(10, timeout), stream=True)
@@ -224,7 +244,7 @@ def make_upload_clip(video, scale, keep_audio, workdir):
 
 def ark_reverse(clip_path, cuts, duration, timeout=600):
     """调 Seed 2.1 Pro 原生视频反推,返回 JSON 文本"""
-    key = ark_key()
+    key = ark_endpoint()[1]
     b64 = base64.b64encode(open(clip_path, "rb").read()).decode()
     segs = []
     bounds = sorted(set([0.0] + cuts + [duration]))
@@ -303,7 +323,7 @@ def reverse(video, out=None, cuts=None, scene_thresh=0.15, scale=480, cut_probe=
     data.setdefault("video_info", vi)
     data["cuts"] = cuts
     out = out or os.path.join(workdir, "shotlist.json")
-    json.dump(data, open(out, "w"), ensure_ascii=False, indent=2)
+    json.dump(_stamp(data), open(out, "w"), ensure_ascii=False, indent=2)
     print(f"[seed_reverse] {len(data.get('shots', []))} 镜 → {out}", flush=True)
     return data
 

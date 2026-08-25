@@ -186,8 +186,17 @@ def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
             tid = use.submit_mm(seg["images"], wav, seg["prompt"],
                                 duration=seg["duration"], resolution=res, ratio="9:16")
         else:
-            tid = use.submit_i2v(seg["anchor"], seg["prompt"],
-                                 duration=seg["duration"], resolution=res, ratio="9:16")
+            # ★i2v 段也要把【全部】参考图送进去,不能只送 seg["anchor"] 一张
+            #   (08-20 榴莲千层:S3 是"有人出镜但没人该开口"→走了 i2v,人设图挂上了却没被送,
+            #    成片里那段换了个完全不同的人)。h3 规范本来就吃多图;
+            #   即梦那条腿只吃一张,所以按后端能力分流。
+            _imgs = seg.get("images") or [seg["anchor"]]
+            if use_name in ("mmh3", "rh") and len(_imgs) > 1:
+                tid = use.submit_mm(_imgs, None, seg["prompt"],
+                                    duration=seg["duration"], resolution=res, ratio="9:16")
+            else:
+                tid = use.submit_i2v(seg["anchor"], seg["prompt"],
+                                     duration=seg["duration"], resolution=res, ratio="9:16")
         print(f"[{name}] task={tid}", flush=True)
         json.dump({"seg": name, "backend": use_name, "task": tid},
                   open(os.path.join(clips_dir, f"{name}.meta.json"), "w"))

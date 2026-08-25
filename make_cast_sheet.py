@@ -37,11 +37,15 @@ LAYOUT = ("人物三视图设定图。画面严格分成上下两部分:"
           "上半部分是三张并排的【头肩肖像特写】,从左到右依次为正面、侧面45度、背面;"
           "下半部分是三张并排的【全身照】,从左到右依次为正面、侧面45度、背面。"
           "六个视角必须是完全同一个人,长相、发型、服装、体型完全一致。"
-          "深灰色影棚无缝背景,统一柔和布光,站姿自然、双臂自然下垂、赤脚。"
+          "深灰色影棚无缝背景,统一柔和布光,站姿自然、双臂自然下垂、{feet}。"
           "画面里不要出现任何文字、标注、编号、分割线或水印。人物是:")
+# ★"赤脚"是刻意的(见上:不让鞋型锁死),但 08-23 实测它会被模型**抄进成片** ——
+#   街拍/户外片里赤脚是硬伤。所以给一个显式开关 --shoes,由片子决定;
+#   ⚠不要让调用方在 --desc 里写鞋:那会和 LAYOUT 里的"赤脚"直接打架(头号病)。
+DEFAULT_FEET = "赤脚"
 
 
-def gen_sheet(cid, name, desc, aliases, pronoun, ratio="3:4", dry=False):
+def gen_sheet(cid, name, desc, aliases, pronoun, ratio="3:4", dry=False, feet=None):
     """生成 sheet.png 并登记到 index.json。已存在则跳过(不重复烧额度)。"""
     d = os.path.join(LIB, "cast", cid)
     sheet = os.path.join(d, "sheet.png")
@@ -49,11 +53,11 @@ def gen_sheet(cid, name, desc, aliases, pronoun, ratio="3:4", dry=False):
         print(f"  [跳过] {cid} 已有 sheet.png")
         return sheet
     os.makedirs(d, exist_ok=True)
-    jobs = {sheet: LAYOUT + desc}
+    jobs = {sheet: LAYOUT.format(feet=feet or DEFAULT_FEET) + desc}
     jf = os.path.join(d, "_job.json")
     json.dump(jobs, open(jf, "w"), ensure_ascii=False)
     if dry:
-        print(f"  [dry] {cid}: {LAYOUT[:24]}…{desc}")
+        print(f"  [dry] {cid}: 足部={feet or DEFAULT_FEET} | {desc}")
         return None
     r = subprocess.run([sys.executable, os.path.join(HERE, "make_host.py"),
                         "--batch", jf, "--ratio", ratio],
@@ -92,6 +96,9 @@ def main():
     ap.add_argument("--pronoun", default="n", choices=["m", "f", "n"])
     ap.add_argument("--batch", default=None, help="JSON 列表:[{id,name,desc,aliases,pronoun}]")
     ap.add_argument("--ratio", default="3:4")
+    ap.add_argument("--shoes", default=None,
+                    help="覆盖设定图里的足部(默认赤脚)。户外/街拍片建议显式给鞋,"
+                         "例:--shoes '脚穿白色运动鞋' —— 赤脚会被模型抄进成片")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     if a.batch:
@@ -105,7 +112,8 @@ def main():
     ok = 0
     for r in rows:
         if gen_sheet(r["id"], r["name"], r["desc"], r.get("aliases") or [],
-                     r.get("pronoun", "n"), a.ratio, a.dry_run):
+                     r.get("pronoun", "n"), a.ratio, a.dry_run,
+                     r.get("shoes") or a.shoes):
             ok += 1
     print(f"[make_cast_sheet] 完成 {ok}/{len(rows)}")
 

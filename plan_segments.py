@@ -189,6 +189,18 @@ def seg_role(shots):
     #   只认【显式 True】:旧 shotlist 没这个字段,行为不变。
     if any(s.get("host_on_camera") is True for s in shots):
         return "kou"
+    # ★★非主播的人在镜头前说话,同样要走口播(08-20 榴莲千层实撞)。
+    #   那条片主播【只露手】(host_on_camera 全 False),但出镜说话的是路人周周 ——
+    #   上面两条判据都是"主播中心"的,于是 8 段全被路由进 i2v,一句口型都不驱动。
+    #   ⚠但**不能简单放开"有台词就算口播"**:下面那条注释记着 08-07 参阿婆的反面事故
+    #     (吃播/菜品空镜 + 画外音,误进 mm 会拿产品镜去对口型)。
+    #   两者的分水岭是【画面里到底有没有人该开口】—— 这正是 speaker_tag 标注的东西,
+    #   08-07 当时还没有这一层,现在有了:
+    #     onscene/mixed + speaker 落到某个在册角色 → 有人在镜头前说话 → 口播
+    #     voiceover(或 speaker 空)                → 没人该开口 → 保持原路由(参阿婆不回退)
+    if any(s.get("voice_mode") in ("onscene", "mixed") and (s.get("speaker") or "").strip()
+           for s in shots):
+        return "kou"
     roles = [s.get("product_role", "") for s in shots]
     if any(r == "hero_real" for r in roles):
         return "hero"
@@ -246,13 +258,23 @@ def pick_product_anchors(shots, products, form_map=None):
     """★返回该段提示词提到的【所有】产品形态对应的图 [(label,path)..],不是只选一张。
     同时返回 missing: 提到了但用户没提供对应图的形态(→即梦会自由发挥,需报警)。"""
     text = _seg_text(shots)
+    # ★形态的优先级由【product_in_frame】决定,不是 FORM_MAP 的表序(08-22)。
+    #   起因:榴莲千层 S1 里产品还在纸桶里、裸蛋糕根本没露出来,但 subject 字段写着
+    #   "巧克力千层蛋糕包装" → "蛋糕" 命中裸蛋糕形态,而它在表里排在纸桶前面,
+    #   于是截到 4 张时把【这一镜真正出现的那个形态】砍掉了。
+    #   product_in_frame 这个字段的用途恰恰就是"产品这一镜以什么形态出现",该由它说了算。
+    pif = " ".join(s.get("product_in_frame", "") or "" for s in shots)
     anchors, seen, missing = [], set(), []
     for words, key in (form_map or FORM_MAP):
-        if any(w in text for w in words):
+        hit = [w for w in words if w in text]
+        if hit:
             if key in products and key not in seen:
-                anchors.append((key, products[key])); seen.add(key)
+                rank = min([pif.find(w) for w in words if w in pif] or [10 ** 6])
+                anchors.append((rank, key, products[key])); seen.add(key)
             elif key not in products and key != "hero":
                 missing.append((words[0], key))
+    anchors.sort(key=lambda x: x[0])
+    anchors = [(k, p) for _, k, p in anchors]
     if not anchors:  # 兜底 hero
         h = products.get("hero") or (next(iter(products.values())) if products else None)
         if h:
