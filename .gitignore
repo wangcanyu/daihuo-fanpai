@@ -38,3 +38,6 @@ references/h3/SKILL.md
 references/h3/base-en.txt
 references/h3/ref-en.txt
 references/h3/runninghub-*.md
+
+# 手工备份文件(改动前留的副本,不入库)
+*.bak_*

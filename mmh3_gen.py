@@ -151,9 +151,21 @@ def _submit(prompt, images=(), audios=(), videos=(), duration=5,
     # ★退避重试只包住 POST,不包住上面的 _as_url 上传——重试不该把图片重传一遍。
     tries = int(os.environ.get("DAIHUO_MMH3_1027_TRIES", len(C1027_BACKOFF)))
     j = None
+    net_left = 3        # ★网络异常单独计数,不占 1027 的重试额度
     for i in range(max(1, tries) + 1):
-        r = requests.post(f"{_base()}/v2/video_generation", headers=_headers(),
-                          json=body, proxies=NO_PROXY, timeout=180)
+        try:
+            r = requests.post(f"{_base()}/v2/video_generation", headers=_headers(),
+                              json=body, proxies=NO_PROXY, timeout=180)
+        except requests.exceptions.RequestException as e:
+            # ★提交期的网络抖动也要自愈(08-21 实撞:S1 在 /v2/video_generation 吃了
+            #   ConnectTimeout,整段丢掉)。upload() 08-18 已经修过同一类坑,
+            #   但 POST 这里只处理了 HTTP 状态码,异常直接抛出去 —— 同一个病咬了两次。
+            if net_left <= 0:
+                raise RuntimeError(f"提交失败(网络重试耗尽): {type(e).__name__}")
+            net_left -= 1
+            print(f"  [提交抖动 {type(e).__name__},15s 后重试(剩{net_left}次)]", flush=True)
+            time.sleep(15)
+            continue
         if r.status_code < 400:
             j = r.json()
             break

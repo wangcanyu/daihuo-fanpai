@@ -46,7 +46,19 @@ def check_dreamina():
 def check_ark():
     import config
     ok, msg = config.ark_key_status()
-    return (OK, "反推key " + msg) if ok else (BAD, "反推key缺失 → 设环境变量 ARK_API_KEY(见 config.py)")
+    if ok:
+        # ★如实报【实际走哪条计费口子 + 哪个模型】。08-22 之前这里只写"Seed2.1Pro key",
+        #   而配好套餐 key 后实际走的是 agent-plan + turbo —— 标签会骗人。
+        try:
+            from config import ark_endpoint, ARK_SEED_MODEL
+            _, _, how = ark_endpoint()
+            msg += f" | 走 {how} · 模型 {ARK_SEED_MODEL}"
+            if how.startswith("agent-plan"):
+                msg += " (套餐无 pro,turbo 平替)"
+        except Exception:
+            pass
+        return (OK, "反推key " + msg)
+    return (BAD, "反推key缺失 → 设环境变量 ARK_API_KEY 或 ARK_PLAN_KEY(见 config.py)")
 
 
 def check_kimi():
@@ -176,7 +188,7 @@ def check_proxy():
 
 def main():
     checks = [("ffmpeg", check_ffmpeg), ("即梦CLI(生成)", check_dreamina),
-              ("Seed2.1Pro key(反推)", check_ark),
+              ("反推模型/计费口子", check_ark),
               ("Kimi K3(双反推腿,可选)", check_kimi),
               ("小云雀(生成备腿,可选)", check_xyq),
               ("MiniMax H3规范(付费腿,可选)", check_mmh3),

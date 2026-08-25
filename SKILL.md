@@ -13,7 +13,7 @@ updated: 2026-07-13
 反推爆款 → 迁移到目标产品 → 即梦生成 → 配音拼接。核心洞察:**病在"反推→写提示词"的转换环节会丢细节/丢动作,不在模型**。本 skill 把验证过的管线固化,每步产物可审。
 
 引擎在本目录(可插拔,换实现只改单个文件):
-`seed_reverse.py` 反推 · `merge_reverse.py` 双反推合并 · `plan_segments.py` 规划 · `h3_prompt.py` 海螺提示词生成 · **`director.py` 约束维度检查(生成前最后一道闸)** · `seam_pick.py` 一镜到底续接挑缝 · `cut_audio.py` 原音切段(≥2s闸+timing.json) · `patch_cast.py` 群戏/多人补丁(人数硬约束) · `gen_segments.py` 生成 · `qc_lipsync.py` 帧级口型质检 · `tts_segments.py` 配音 · `assemble.py` 装配 · `deliver.py` 交付(剪映草稿/成品) · `doctor.py` 体检。
+`seed_reverse.py` 反推 · `merge_reverse.py` 双反推合并 · **`route.py` 判片型(决定后续生成方式)** · `plan_segments.py` 规划 · `h3_prompt.py` 海螺提示词生成 · **`director.py` 约束维度检查(生成前最后一道闸)** · `seam_pick.py` 一镜到底续接挑缝 · `cut_audio.py` 原音切段(≥2s闸+timing.json) · `patch_cast.py` 群戏/多人补丁(人数硬约束) · `gen_segments.py` 生成 · `qc_lipsync.py` 帧级口型质检 · `qc_defects.py` 四类缺陷定量抽帧 · `grid_off.py` 多卷同网格对照 · `is_speech.py`/`voice_cmp.py` 音轨判据 · `tts_segments.py` 配音 · `assemble.py` 装配 · `deliver.py` 交付(剪映草稿/成品) · `doctor.py` 体检。
 生成后端(可插拔,契约 `submit_*()->tid` / `wait_download(tid,dst)->(size,usage)`):即梦CLI(内置) · **`mmh3_gen.py` MiniMax H3 官方规范(秘塔渠道,h3 首选)** · `ark_gen.py` 火山 · `xyq_gen.py` 小云雀 · `rh_gen.py` RunningHub海螺h3(同模型贵4.4倍,已退役)。
 
 > **要改造/换引擎/接手本 skill?先读 `DESIGN.md`**(设计理由 + 数据契约 + 扩展点)。参考样例在 `references/`。
@@ -104,6 +104,28 @@ python3 <engine>/doctor.py
           `--hard-max-cuts`**(不设闸会把9个镜头塞一段,超即梦"硬切5崩"红线和h3已验的3刀)。
           本片实测:10段50s → 8段42s,浪费39%→28%。默认 --min-dur 0 = 旧行为不变。
         → ★人审 run/segments.md:看分镜卡片 + 完备性关卡的"漏动作"警告,微调提示词/锚图/台词
+2.15 ★★判片型(08-23 新增,立项档案之后、规划之前)
+        python3 route.py run/
+        → 从 profile.json + shotlist.json 抽结构特征,查 references/film_types.json 判型,给出后续生成方式。
+        ★为什么必须先判型再生成:同一个改动在不同片型上一个是解药一个是毒药。
+          实测(榴莲千层 08-23,双臂 n=3,统一网格):
+          【画外主说话人】的片子必须**剧本先行**(台词写进 prompt 让模型自己发声)——
+          画外音窗口里出镜者张嘴的帧从 37%(极差1~11,三卷崩一卷)降到 5~13%(六卷无一崩);
+          而【主播出镜口播】恰恰相反:只有一个说话人、没有归属歧义,剧本先行只有丢原声的代价。
+        ★片型库的键是【结构特征】不是题材名。"街头挑战/开箱/探店"不决定生成方式,
+          "主说话人出不出镜/段内换不换人说/产品有没有可读文字"才决定,而这些反推已经产出。
+        ★没命中任何片型时**不要照着最近一条片硬套** —— 回 film_types.json 加一条,
+          把这条片的结构特征和路由写清楚(与 director.py 的 RULES 同一个规矩:翻一次车加一行)。
+
+2.2 ★★立项档案(所有片必做,反推之后第一件事)
+        python3 profile.py run/目标.mp4 --shotlist run/shotlist.json --out run/profile.json
+        → 回答"这是什么片型":机位形态(胸挂POV/手持自拍/旁观/固定)、**拍摄者是谁、出不出镜、
+          说不说话**、结构化演员表、声音层次、叙事阶段。
+        → ★**必须人过目**:它驱动路由、机位措辞、说话人归属和演员表,判错了下游全错。
+        → 不做这步的后果(08-21 榴莲千层):那条片主播只露手却是主要说话人,
+          管线里没有"拍摄者"这个概念 → 8段全路由错、他的话被派给路人对口型、
+          第一视角拍成了旁观视角。**每个环节各自猜,猜错也没人知道。**
+
 2.3 ★演职表与资产(群戏/街采片必做;单主播片跳过)
         python3 needed_assets.py run/shotlist.json        # 报"要哪些产品图 + 哪些人设图"
         python3 cast_plan.py run/shotlist.json --out run/cast.json   # 聚出角色候选
@@ -126,8 +148,8 @@ python3 <engine>/doctor.py
           连 GitHub 直连都连不上,要靠代理)。本地 HTML 离线可用,是这个工具的主场。
 
 2.4 ★说话人标注(有画外旁白的片必做)
-        python3 speaker_tag.py run/目标.mp4 --shotlist run/shotlist.json --cast run/cast.json
-        → 逐句判 voiceover/onscene/mixed + 说话人。**一次看全片且带音轨**(判旁白靠音色贯穿)。
+        python3 speaker_tag.py run/目标.mp4 --shotlist run/shotlist.json --profile run/profile.json --cast run/cast.json
+        → 出**带时间戳的说话轮次**(不是一镜一个说话人:长段里问答来回好几轮,一个标签没法执行)。\n        → speaker 三选一:`operator`(画外拍摄者→全员闭嘴)/ 在册角色 / none。\n          实测榴莲千层 48 轮里 29 轮是 operator —— 六成的话不该有人对口型。
         → ★人审那张对照表(带★的是信心非"高"的);归不上册的说话人会单独列出来交你定夺。
         → 确认后 --apply 写回 shotlist 的 speaker/voice_mode。
         → 不做这步的后果:旁白镜里所有人都在对着画外音张嘴(小禾家 44 个台词镜里 15 个是旁白)。

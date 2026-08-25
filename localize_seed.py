@@ -16,9 +16,13 @@ facts.json 示例:
 """
 import argparse, json, os, time, requests
 
-ARK_URL = "https://ark.cn-beijing.volces.com/api/v3/responses"
+# ★端点必须从 config.ark_endpoint() 取,别硬编码 /api/v3。
+#   08-22 切套餐时只把【key】换成了 ark_endpoint()[1],URL 还钉在按量口子上,
+#   而 ARK_SEED_MODEL 已经跟着计费口子变成了套餐里的 turbo —— 套餐 key + 套餐模型名
+#   打到按量 URL 上,轻则 401 重则计费口子对不上。**换端点要连 URL 一起换。**
 from config import ARK_SEED_MODEL as ARK_MODEL   # 公共模型名,可用环境变量 ARK_SEED_MODEL 覆盖
-from config import ark_key
+from config import ark_key, ark_endpoint
+ARK_URL = ark_endpoint()[0].rstrip("/") + "/responses"
 # 脚本改写相关的弹药包(按重要性)
 QC_FILES = ["02-跨类目复制与机制.md", "01-选题与卖点.md", "03-句式库.md", "04-诊断rubric与红线.md"]
 
@@ -33,7 +37,7 @@ def load_ammo(qc_dir):
 
 
 def call_seed(prompt, timeout=200):
-    key = ark_key()
+    key = ark_endpoint()[1]      # ★跟着端点走,别再单独取按量 key
     body = {"model": ARK_MODEL, "input": [{"role": "user", "content": [
         {"type": "input_text", "text": prompt}]}],
         "thinking": {"type": "disabled"}, "stream": True}

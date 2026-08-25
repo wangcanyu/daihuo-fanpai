@@ -92,7 +92,7 @@ def translate(items):
         return {}
     try:
         import requests
-        from config import ark_key, ARK_SEED_MODEL
+        from config import ark_endpoint, ARK_SEED_MODEL
         payload = json.dumps(items, ensure_ascii=False)
         prompt = ("把下面 JSON 里每个中文短语翻成简洁、可直接用于视频生成提示词的英文,"
                   "保持镜头术语准确(景别/运镜/动作),不要加任何解释或修饰。"
@@ -100,8 +100,9 @@ def translate(items):
         body = {"model": ARK_SEED_MODEL,
                 "input": [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
                 "thinking": {"type": "disabled"}, "stream": True}
-        r = requests.post("https://ark.cn-beijing.volces.com/api/v3/responses",
-                          headers={"Authorization": f"Bearer {ark_key()}",
+        # ★URL 也要跟着 ark_endpoint 走,见 judge.py 顶部注释
+        r = requests.post(ark_endpoint()[0].rstrip("/") + "/responses",
+                          headers={"Authorization": f"Bearer {ark_endpoint()[1]}",
                                    "Content-Type": "application/json"},
                           json=body, proxies={"http": None, "https": None},
                           timeout=(10, 300), stream=True)
@@ -226,7 +227,11 @@ def load_scene(assets_path):
             continue
         ap_ = plate if os.path.isabs(plate) else os.path.join(LIB, plate)
         if os.path.exists(ap_):
-            out[sc["name"]] = {"plate": ap_, "desc": m.get("desc") or sc.get("desc") or sc["name"]}
+            # ★在【入口】就洗干净,别留给下游各洗各的。08-22 实撞:build 洗了、翻译池没洗,
+            #   两边字符串对不上 → 翻译落空,整句中文原样进了英文提示词。
+            #   同一样东西有多个出口时,唯一可靠的做法是**在源头洗一次**。
+            _d = m.get("desc") or sc.get("desc") or sc["name"]
+            out[sc["name"]] = {"plate": ap_, "desc": _clean_scene_desc(_d, no_text=True)}
     return out
 
 
@@ -237,6 +242,252 @@ def scene_of(shots, scenes):
     txt = (shots[0].get("scene") or "") if shots else ""
     hit = [k for k in scenes if k and k in txt]
     return scenes[max(hit, key=len)] if hit else None
+
+
+# ─── 立项档案(profile.json):谁在拍、怎么拍 ────────────────────────────────
+# ★08-21 榴莲千层的根治点:那条片是胸挂第一视角,主要说话人是**不出镜的拍摄者**,
+#   而管线里从来没有"拍摄者"这个概念 —— 于是他的话被派给了出镜的路人去对口型。
+#   现在机位形态和拍摄者身份都从 profile 来,不再靠各环节各自猜。
+RIG_CLAUSE = {
+ # ★08-22 拆成两半。原文把 "the frame moves with the wearer's steps" 焊死在片级常量里,
+ # 8/8 段都发,而反推里只有 1 段含走路词(S8 甚至明写"三位路人站在镜头前")——
+ # 成片每次切镜三个人就一起朝镜头走。**逐镜属性被写成了片级常量。**
+ # 判据:一句"看起来永远成立"的话,如果只在 1/8 的镜里成立,它就不是片级常量。
+ # 走动那半句改成 CHEST_POV_WALK,只在该镜反推确实含走路词时才追加。
+ # 静止时用量化抖动措辞(低幅度手持 3cm 内),它不暗示任何人在移动。
+ "chest_pov": ("Camera: a chest-mounted first-person action camera worn by the host. "
+               "24mm wide-angle lens with slight barrel distortion, chest height, f/4 medium "
+               "depth of field, 180-degree shutter angle, low-amplitude handheld shake under "
+               "3 cm, natural motion blur. The people being filmed look straight into the lens "
+               "because they are talking to the person wearing it. "
+               "The wearer is NEVER visible except that {hands} may enter the frame from very "
+               "close range at the bottom or side edges."),
+ "selfie_handheld": ("Camera: handheld front-facing phone selfie at arm's length, "
+                     "vertical 9:16, the host holds the phone and is on camera."),
+ "observer_handheld": ("Camera: handheld observational camera, as if a third person is "
+                       "filming from nearby. The camera operator is not visible."),
+ "tripod_fixed": "Camera: locked-off tripod shot; the framing does not move.",
+}
+
+
+def load_profile(assets_path):
+    run = os.path.dirname(os.path.abspath(assets_path))
+    p = os.path.join(run, "profile.json")
+    if not os.path.exists(p):
+        return {}
+    try:
+        return json.load(open(p))
+    except Exception as e:
+        print(f"[h3][⚠] profile.json 读取失败({type(e).__name__}),按无档案处理", file=sys.stderr)
+        return {}
+
+
+# ★只在该镜确实在走时才追加的那半句(见 RIG_CLAUSE["chest_pov"] 注释)
+CHEST_POV_WALK = (" In this shot the wearer is walking, so the frame advances and sways "
+                  "with the wearer's steps.")
+_WALK_WORDS = ("\u8d70", "\u8fc8", "\u524d\u884c", "\u8fce\u9762", "\u884c\u8d70")  # 走/迈/前行/迎面/行走
+
+
+def shots_walking(shots):
+    """这一段的反推动作里到底有没有人在走。★只读反推原文,不猜。"""
+    t = " ".join((x.get("action") or "") + (x.get("subject") or "") for x in (shots or []))
+    return any(w in t for w in _WALK_WORDS)
+
+
+def rig_clause(prof, shots=None):
+    if not prof:
+        return None
+    op = prof.get("operator") or {}
+    c = RIG_CLAUSE.get(prof.get("rig"))
+    if not c:
+        return None
+    hands = E_hands(op.get("desc") or "")
+    c = c.format(hands=hands) if "{hands}" in c else c
+    if prof.get("rig") == "chest_pov" and shots is not None and shots_walking(shots):
+        c += CHEST_POV_WALK
+    return c
+
+
+def E_hands(desc):
+    """拍摄者可见部分的英文描述,默认就是"手"。"""
+    return "the wearer's hands" if not desc else "the wearer's hands"
+
+
+# ★08-22 把"闭嘴"从【禁令】改成【正面指派的动作】。
+#   依据两条:①通用 I2V 规范"不要写 no/not/禁止 这类指令式否定词,改写成正向约束";
+#   ②第〇步实验的意外发现 —— 抽掉/削弱音轨后模型不但没闭嘴,反而更用力地"演说话",
+#     说明它默认就要让人对着镜头说话。**给它一条禁令,不如给它一件事做**:
+#     "在听、抿着嘴、点头、眨眼"是可执行的动作,"不许张嘴"不是。
+#   ⚠这是待验证假设,不是结论。验完再决定留不留。
+def speech_timeline(shots, roles, cast_ids, t0, framing=False):
+    """把 speech_turns 变成【逐秒口型时间表】。
+    ★这是治"一段14秒一个说话人"的关键:榴莲千层一段里博主问、路人答来回好几轮,
+      只给一个标签下游根本不知道该让谁在第几秒开口(旧版 6/8 段只能标 mixed)。
+    ★operator 轮 = 画外拍摄者在说 → 画面里所有人闭嘴。全片 60% 的轮次是这种。
+    ★★格式必须紧凑:**规则只说一遍,逐行只写时间+代号**。
+      08-21 首版把每轮都写成完整句子(operator 那句 165 字符重复 29 遍),
+      直接撑爆 h3 的 **7000 字符** 上限,S1/S6/S7 三段提交被拒(400/2013)。
+      压缩后同样的信息只占约四分之一,而且代号表比重复句子更清楚。"""
+    rows, used = [], set()
+    for s in shots:
+        for t in (s.get("speech_turns") or []):
+            a_, b_ = float(t["start"]) - t0, float(t["end"]) - t0
+            if b_ <= a_:
+                continue
+            who = t.get("speaker")
+            if who == "operator":
+                tag = "OFF"
+            elif who:
+                r = next((x for x in roles if x["name"] == who), None)
+                tag = f"S{cast_ids[r['key']]}" if r else "ANY"
+            else:
+                tag = "SILENT"
+            used.add(tag)
+            rows.append((a_, b_, tag))
+    if not rows:
+        return None
+    rows.sort()
+    # 合并相邻同代号的轮次,进一步省字符
+    merged = [list(rows[0])]
+    for a_, b_, tag in rows[1:]:
+        if tag == merged[-1][2] and a_ - merged[-1][1] < 0.35:
+            merged[-1][1] = b_
+        else:
+            merged.append([a_, b_, tag])
+    # ★OFF 这一行必须跟着 framing_timeline 的开关改口径。开了换景别之后,OFF 窗口里
+    #   大部分时间脸根本不在画面里,再说"画面里每个人都在听"就等于对着一个不存在的
+    #   主语下指令 —— 又是"两句话打架"那个病。开关一开就把主语改成【条件式】。
+    # ★OFF 那一行只在真的有 OFF 轮次时才发。探针段(画外音整条拿掉)里没有 OFF,
+    #   却照样贴着"画外的人在说"的解释 —— 又是一句对着不存在的东西下的指令。
+    key = ["speech_timeline — who may open their mouth, and when:"]
+    key += [] if "OFF" not in used else [
+           ("  OFF = the off-camera host (the person wearing the camera) speaks; nobody on "
+            "camera says anything. Whenever a face is in frame it is listening: lips together, "
+            "small nods, eyes toward the lens, natural blinks."
+            if framing else
+            "  OFF = the off-camera host (the person wearing the camera) speaks; "
+            "everyone in frame is listening: lips together, small nods, eyes toward the lens, "
+            "natural blinks and micro-expressions.")]
+    for tag in sorted(t for t in used if t.startswith("S") and t != "SILENT"):
+        key.append(f"  {tag} = <Subject {tag[1:]}> speaks; lip movement follows <Audio 1>; "
+                   f"every other character listens with lips together, small nods and natural blinks.")
+    if "ANY" in used:
+        key.append("  ANY = the person being filmed replies; every other character listens with lips together, small nods and natural blinks.")
+    if "SILENT" in used:
+        key.append("  SILENT = nobody speaks; all mouths stay closed.")
+    key += [f"  {a_:05.2f}-{b_:05.2f} {tag}" for a_, b_, tag in merged]
+    return "\n".join(key)
+
+
+# ─── OFF 窗口换景别(08-23) ───────────────────────────────────────────────
+# ★这一条是【规划层】解法,不是又一句提示词约束。第〇步实验已经证明:
+#   拍摄者说话时画面里的人照样张嘴,是 h3 的**行为**,音轨改不动它、措辞也改不动它
+#   (五条音频臂全败;正向措辞/数手/机位拆分三条提示词臂也全无位移)。
+#   治不了行为,就别把脸放在它能犯错的地方 —— 画外音在说的时候把镜头低下去看手,
+#   错口型就没有载体。**把一个模型能力问题换成一个景别选择问题。**
+# ★代价是真实的:这会偏离原片的景别。所以必须限流,不能一见 OFF 就低头 ——
+#   榴莲千层全片 75% 的时间是拍摄者在说话,无差别执行等于把片子拍成一段手部特写。
+#   四道闸(下面四个常量)就是干这个的。
+# ★为什么 B 只裁到肩膀而不是纯拍手:纯手部特写会丢掉场地、人物和连贯性,
+#   接缝也难缝;裁掉头顶只丢"嘴",丢的正好是模型会画错的那部分。
+MM_PROMPT_MAX = 7000           # h3(海螺)单条提示词字符上限,超了提交直接 400/2013
+OFF_FRAMING_MIN = 2.0          # 单个 OFF 窗口(裁掉提前量之后)至少这么长才值得换
+OFF_FRAMING_LEAD_IN = 0.6      # 段首这么久之内不换 —— 首帧要留给接缝(seam_pick)
+OFF_FRAMING_LEAD_OUT = 0.5     # 下一个人开口【之前】就把脸摇回来,别等他开口才到位
+OFF_FRAMING_MAX_WINDOWS = 2    # 一段最多换两次:再多就是一段里五次摇镜,必乱
+OFF_FRAMING_MAX_RATIO = 0.65   # 换掉的时间占比上限,超了就从最短的开始丢
+
+
+def _merged_turns(shots, t0):
+    """把本段所有 speech_turns 拉平成按时间排好、相邻同说话人已合并的列表。
+    ★与 speech_timeline 用同一套合并口径(0.35s 粘合)——**两处不能各合各的**,
+      否则换景别的窗口边界和口型时间表的边界对不齐,又是一次自相矛盾。"""
+    rows = []
+    for s in shots:
+        for t in (s.get("speech_turns") or []):
+            a_, b_ = float(t["start"]) - t0, float(t["end"]) - t0
+            if b_ > a_:
+                rows.append((a_, b_, t.get("speaker")))
+    if not rows:
+        return []
+    rows.sort()
+    m = [list(rows[0])]
+    for a_, b_, w in rows[1:]:
+        if w == m[-1][2] and a_ - m[-1][1] < 0.35:
+            m[-1][1] = b_
+        else:
+            m.append([a_, b_, w])
+    return m
+
+
+def off_framing_windows(shots, t0, dur):
+    """挑出值得换景别的画外音窗口。返回 [[start, end], ...](段内相对秒)。
+    ★纯画外段(整段只有 operator 在说)直接返回空:那种段里没有"这句到底是谁说的"
+      的归属歧义,换了景别只是白白丢掉原片的景别,不划算。"""
+    m = _merged_turns(shots, t0)
+    if not m or not any(w and w != "operator" for _, _, w in m):
+        return []
+    cand = []
+    for a_, b_, w in m:
+        if w != "operator":
+            continue
+        a2 = max(a_, OFF_FRAMING_LEAD_IN)
+        # 窗口一直顶到段尾时不留提前量 —— 后面没人要开口,没必要提前摇回去
+        b2 = b_ if b_ >= dur - 0.05 else b_ - OFF_FRAMING_LEAD_OUT
+        if b2 - a2 >= OFF_FRAMING_MIN:
+            cand.append([round(a2, 2), round(b2, 2)])
+    cand.sort(key=lambda x: x[1] - x[0], reverse=True)
+    cand = cand[:OFF_FRAMING_MAX_WINDOWS]
+    # ★超预算时【剪短】不【丢弃】。首版写的是 cand.pop(),结果 S8 那个 11.3s 的窗口
+    #   只因为超预算 2.2s 就被整条扔掉,该段一个窗口都不剩 —— 为了省 2 秒丢掉 11 秒的收益。
+    #   从窗口【起点】往后剪:开头多留一会儿原景别,摇下去发生得更晚,过渡更轻。
+    budget = OFF_FRAMING_MAX_RATIO * dur
+    # ⚠容差 0.05 不能去掉:窗口边界要 round 到 0.01,剪到刚好等于预算几乎不可能,
+    #   写成裸 `> budget` 会因为残留几毫秒一直剪、而每轮又被四舍五入抹平 → 死循环
+    #   (首版实撞,脚本跑满 120s 超时)。
+    while cand and sum(b - a for a, b in cand) > budget + 0.05:
+        i = max(range(len(cand)), key=lambda j: cand[j][1] - cand[j][0])
+        over = sum(b - a for a, b in cand) - budget
+        if (cand[i][1] - cand[i][0]) - over < OFF_FRAMING_MIN:
+            cand.pop(i)          # 剪完就不够长了,那才丢
+        else:
+            cand[i][0] = round(cand[i][0] + over, 2)
+    return sorted(cand)
+
+
+def framing_timeline(shots, roles, cast_ids, subj_ids, t0, dur, prof):
+    """画外音窗口把镜头低下去看手,人脸只留到肩膀。没资格换就返回 None。"""
+    # ★只在胸挂第一视角上成立:低头看自己的手是【佩戴者的自然动作】。
+    #   三脚架/旁观机位没有"佩戴者",硬摇下去讲不通,也没有手可看。
+    if (prof or {}).get("rig") != "chest_pov":
+        return None
+    op = (prof or {}).get("operator") or {}
+    if not (op.get("speaks") and op.get("on_camera") is False and op.get("hands_visible")):
+        return None
+    if not roles:
+        return None
+    wins = off_framing_windows(shots, t0, dur)
+    if not wins:
+        return None
+    # ⚠ subj_ids 同时装着人物("cast:<key>")、主播("host")和产品(形态名)。
+    #   只排除 "host" 会把 <Subject 1>(周周)当成产品 —— 首版实撞,B 里写出
+    #   "低头看拍摄者的手和周周"。产品只能从【不带 cast: 前缀、也不是 host】的键里取。
+    pid = next((v for k, v in sorted(subj_ids.items(), key=lambda kv: kv[1])
+                if k != "host" and not k.startswith("cast:")), None)
+    # ★不要写死"看拍摄者自己的手":这一段里蛋糕在周周手上,拍摄者手是空的,
+    #   照着写会拍出一双空手的特写。B 要盯的是【动作中心的那双手和产品】,
+    #   谁的手由画面自己决定。
+    holds = f"{'' if not pid else '<Subject %d> ' % pid}"
+    return "\n".join([
+        "framing_timeline — where the worn camera points. Framing is A except in the windows "
+        "below; each A/B change is a smooth 0.4 s tilt, never a cut, and the place, lighting, "
+        "people and clothing stay the same across it.",
+        "  A = the framing described above, the on-camera characters' faces in frame.",
+        f"  B = the worn camera tilts down to the hands at the centre of the action: "
+        f"{holds}and the hands holding it fill the lower two thirds of the frame; the "
+        f"on-camera characters are in frame from the shoulders down, heads above the top edge.",
+        *[f"  {a:05.2f}-{b:05.2f} B" for a, b in wins],
+    ])
 
 
 def cast_in(shots, cast):
@@ -295,6 +546,86 @@ def _strip_talking(action):
     return s.strip(_TRIM)
 
 
+# ★与 _strip_talking 同一个病的第五次:提示词一边写"画面里不出现计时器",
+#   一边在动作描述里写着"计时器在旁显示倒计时" —— 模型跟了后者,秒表照样出现在成片里。
+#   **两句话打架时只能删掉打架的那句,加更强的约束没用。**(见 HANDOFF 该节)
+#   只在 assets.json 的 extra_constraints 里给该段下了"不出现计时器"禁令时才剥。
+_TIMER = re.compile(r"(并|[,\uFF0C、])?\s*[^,\uFF0C。;\uFF1B]*?"
+                    r"(计时器|倒计时|秒表|计时牌|读秒)[^,\uFF0C。;\uFF1B]*")
+
+
+def _strip_timer(action):
+    s = _TIMER.sub("", action or "")
+    s = re.sub(r"[,\uFF0C、]\s*(?=[,\uFF0C、])", "", s)
+    return s.strip(_TRIM)
+
+
+# ★同一个病的第七次:约束写着"不得出现任何可读文字/logo",而动作描述里写着
+#   "白色**带红色标识**的纸碗包装""**印有红色文字**" —— 等于一边禁止画字、一边点名要字。
+#   08-22 榴莲千层 S1/S7 中招,成片左上角凭空生成"CUE创业TV"。
+#   ★注意这【不是】"把产品的字去掉"(那是用户的品牌,不能删) —— 删的是**提示词里指使
+#     模型去画字的措辞**;字本身该走后期贴片或换腿(见 HANDOFF「H3 画不出汉字」)。
+_PRINTED = re.compile(r"(带|印有|标有|写着|印着)[^,\uFF0C。;\uFF1B]{0,12}?"
+                      r"(标识|文字|字样|logo|LOGO|产品名称|品牌名|标签)的?")
+# ★尾部别再跟 [^,。]{0,4} 兜底:实测它会把后面的正常词一起吃掉
+#   ("带红色标识的巧克力千层纸碗" → 连"巧克力"都被吃了)。剥字符串宁可剥少不可剥多。
+
+
+def _strip_printing(action):
+    s = _PRINTED.sub("", action or "")
+    s = re.sub(r"[,\uFF0C、]\s*(?=[,\uFF0C、])", "", s)
+    return s.strip(_TRIM)
+
+
+def _clean_action(shot, seg, cfg):
+    """该镜动作的【唯一口径】。★08-22:以前 detailed_description 剥过、summary 没剥,
+      于是逐镜删掉的"说话/计时器"在 summary 里原样留着 —— 同一份提示词里前后自相矛盾,
+      模型跟了 summary。榴莲千层 4/8 段中招(summary 写"手举着显示0:00的计时器",
+      底部约束写"本段不出现计时器")。**凡是要剥的东西,必须在所有出口剥同一次。**"""
+    act = _strip_onscreen(shot.get("action", ""))
+    if shot.get("voice_mode") == "voiceover":
+        act = _strip_talking(act)
+    ec = (cfg.get("extra_constraints") or {}).get(seg["seg"], "")
+    if "countdown timer is NOT" in ec:
+        act = _strip_timer(act)
+    if "Readable text (hard)" in ec:
+        act = _strip_printing(act)            # 禁字的片上不许再点名要字(见 _strip_printing)
+    return act
+
+
+# ★场景定义不许【点名要人】,也不许在禁文字的片上【点名要招牌】(08-22 实证)
+#   榴莲千层撞脸的真根因在这里:场景 desc 写着"远处有零星行人""其他行人""路过的行人",
+#   而 Cast constraint 同时写着"背景路人虚化、无可辨认脸" —— 两句话打架(本项目头号病)。
+#   更要命的是**那些行人没有任何身份来源**,模型只能拿手上仅有的两张人设图去复制,
+#   于是背景路人和主角长了同一张脸。8/8 段全中招。
+#   同理"亮灯的商铺招牌"⇄"不得出现任何可读文字" —— 成片左上角凭空生成"CUE创业TV"。5/8 段。
+#   ★人属于 cast 层、由人设图供身份;场景板按设计本来就是无人的。场景定义只该描述【地方】。
+_SCENE_PERSON = re.compile(r"行人|路人|围观|人群|顾客|游客|passer|pedestrian")
+_SCENE_TEXT = re.compile(r"招牌|店招|字样|文字|标牌|广告牌|灯箱|logo|LOGO")
+
+
+def _clean_scene_desc(desc, no_text=False):
+    """剥掉场景描述里点名要人/要招牌的分句,并去掉重复分句。★半角全角一起列(踩过两次)。"""
+    if not desc:
+        return desc
+    toks = re.split(r"([,\uFF0C、;\uFF1B。:\uFF1A])", desc)
+    out, seen = [], set()
+    for i in range(0, len(toks), 2):
+        cl = toks[i].strip()
+        dl = toks[i + 1] if i + 1 < len(toks) else ""
+        if not cl:
+            continue
+        if _SCENE_PERSON.search(cl):
+            continue
+        if no_text and _SCENE_TEXT.search(cl):
+            continue
+        if cl in seen:                      # 反推逐镜写的场景合并后大量重复
+            continue
+        seen.add(cl)
+        out.append(cl + (dl if dl not in ("", "\u3002") else ""))
+    return "".join(out).strip(",\uFF0C、;\uFF1B:\uFF1A ")
+
+
 def _voice_line(shot, roles, cast_ids, has_cast):
     """该镜的口型指令。★优先用 speaker_tag 标注的 voice_mode/speaker(有图像依据),
     没有标注才退回"谁在画面中央"的启发式。
@@ -307,7 +638,7 @@ def _voice_line(shot, roles, cast_ids, has_cast):
     mode = shot.get("voice_mode")
     if mode == "voiceover":
         return (" This line is off-screen narration: nobody in frame is saying it. "
-                "Every character keeps a closed, relaxed mouth — do not animate any "
+                "Every character in frame is listening: lips together, small nods, natural blinks. "
                 "talking, and do not sync anyone's lips to <Audio 1> in this shot.")
     if mode in ("onscene", "mixed") and has_cast:
         nm = shot.get("speaker")
@@ -318,10 +649,10 @@ def _voice_line(shot, roles, cast_ids, has_cast):
                      "on-screen line belongs to this character." if mode == "mixed" else "")
             return (f" <Subject {cast_ids[r['key']]}> is the one speaking in this shot; "
                     f"{pos} lip movement follows <Audio 1> precisely, with natural jaw and "
-                    f"cheek motion. Every other character keeps a closed, relaxed mouth.{extra}")
+                    f"cheek motion. every other character listens with lips together, small nods and natural blinks.{extra}")
         # 标了 onscene 但说话人归位失败 → 泛指令,不猜(猜错=错的人开口)
         return (" The character who is speaking on camera syncs their lip movement to "
-                "<Audio 1>; every other character keeps a closed, relaxed mouth.")
+                "<Audio 1>; every other character listens with lips together, small nods and natural blinks.")
     return None          # 无标注 → 调用方退回旧启发式
 
 
@@ -341,10 +672,16 @@ def _frame_lead(shot, roles):
     return best
 
 
+_OFF_FRAMED = {}          # seg -> 换了景别的窗口行,跑完打印一览
+_OFF_DROPPED = {}         # seg -> 因超长被迫丢掉换景别的段(超出多少字符)
+
+
 def build(seg, shots, cfg, en):
     """产出该段的六段式提示词。en = 中文→英文映射(可为空,空则原样用中文)。"""
     def E(s):
         return en.get(s, s) if s else s
+
+    _RIG = rig_clause(cfg.get("_profile") or {}, shots)
 
     host_desc = cfg.get("host_desc", "")
     prod_desc = cfg.get("product_desc", "产品")
@@ -409,7 +746,12 @@ def build(seg, shots, cfg, en):
                                 if any(a in ((s.get("person") or "") + (s.get("subject") or ""))
                                        for a in r["aliases"]))
         roles.sort(key=lambda r: (r["name"] in spk, cnt.get(r["key"], 0)), reverse=True)
-    has_cast = bool(roles) and seg["type"] == "mm"
+    # ★i2v 段同样要绑人设图(08-20 榴莲千层实撞)。
+    #   原先这里限定 `type == "mm"`,假设"i2v = 纯产品空镜,画面里没人" ——
+    #   在小禾家成立,在这条片不成立:S3 是周周在吃蛋糕,只是【没人该开口】所以走了 i2v,
+    #   结果一张人设图都没挂 → 成片里那段换了个完全不同的人。
+    #   ★"要不要口型"和"画面里有没有人"是两件事,别再用路由类型去代替后者。
+    has_cast = bool(roles)
     has_host = bool(host_a) and seg["type"] == "mm" and not has_cast
     # Picture 编号:人物在前(cast 各角色 / 或单主播),其后是各产品形态;i2v 段只有产品
     pics, defs, subj_ids, need_fd = [], [], {}, []
@@ -493,29 +835,65 @@ def build(seg, shots, cfg, en):
     sc = scene_of(shots, cfg.get("_scenes") or {})
     if sc and len(pics) < REF_CAP:
         pics.append(sc["plate"])
+        _no_text = "Readable text (hard)" in (cfg.get("extra_constraints") or {}).get(
+            seg["seg"], "")
+        _sd = _clean_scene_desc(sc["desc"], no_text=_no_text)
         defs.append(f"<Subject {env_id}> is the environment, defined by <Picture {n}>: "
-                    f"{E(sc['desc']) or sc['desc']}. Use it as the reference for the layout, "
+                    f"{E(_sd) or _sd}. Use it as the reference for the layout, "
                     f"props, lighting and colour grade of the location; keep the same place "
                     f"throughout. Do not copy any person from it.")
         n += 1
     else:
-        defs.append(f"<Subject {env_id}> is the environment: {E(env) or env}.")
+        _env = _clean_scene_desc(env, no_text="Readable text (hard)" in (
+            cfg.get("extra_constraints") or {}).get(seg["seg"], ""))
+        defs.append(f"<Subject {env_id}> is the environment: {E(_env) or _env}.")
     defs.append("<Audio 1> is the supplied audio track. It is reused directly and completely "
                 "as the only audio layer.")
     # ★人数硬约束。单主播="有且仅有一人";多人物片则钉住【确切的这几位】——
     #   08-13 前这里恒走单主播分支,给一条多人街采片也硬写"exactly one person",
     #   提示词自相矛盾,模型只能自由发挥。
+    # ★08-22 改成【正向措辞】。依据:通用 I2V 提示词规范里那条 ——
+    #   "AVOID 只写不要出现的东西,用名词或短语列表;不要写完整否定句,
+    #    不要写 no/don't/not/不要/禁止 这类指令式否定词;平台没有独立 Negative 字段时,
+    #    直接把限制改写成主提示词里的【正向约束】"。
+    #   错误示范: no face distortion, no color shift  → 正确: stable facial identity, ...
+    #   本项目原来的 Cast constraint 全是否定式(`Do not add any other named character`),
+    #   而且 "named" 还留了口子 —— 没名字的路人不算违规,S2 因此凭空多出一个人并复制。
+    #   ★这与"删掉打架的那句"不冲突,是互补:**先删矛盾,再把活下来的约束写成正向。**
+    _NUM = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
     if has_cast:
         ss = ", ".join(f"<Subject {cast_ids[r['key']]}>" for r in roles)
+        _cnt = _NUM.get(len(roles), str(len(roles)))
+        _ONLY_N = (f"The frame contains exactly {_cnt} "
+                   f"{'person' if len(roles) == 1 else 'people'}: {ss} — they are the only "
+                   f"{'one' if len(roles) == 1 else 'ones'} on camera.")
+        # ★手要定数(缺陷③):成片里出现过一只掌心朝上、不属于任何人的手。
+        #   胸挂 POV 下画面里合法的手 = 出镜角色自己的 + 拍摄者伸进来的,写清楚就没有第三种。
+        _op = (cfg.get("_profile") or {}).get("operator") or {}
+        _HANDS_LINE = (
+            f"Every hand in frame belongs to someone: each of {ss} has exactly two hands, "
+            f"and the only additional hands are the off-camera wearer's, entering from the "
+            f"bottom or side edge."
+            if _op.get("hands_visible") else
+            f"Every hand in frame belongs to someone: each of {ss} has exactly two hands.")
         defs.append(
             f"Cast constraint (hard): exactly {ss} {'is' if len(roles) == 1 else 'are'} the "
             f"on-camera character{'' if len(roles) == 1 else 's'} from start to finish. "
-            f"Background passers-by stay far away and out of focus, with no recognisable face. "
-            f"Do not add any other named character, and do not swap, replace or re-render "
-            f"the face of {ss} across the hard cuts.")
+            f"{_ONLY_N} "
+            f"Anyone further away stays out of focus as an indistinct silhouette. "
+            f"Each of {ss} keeps the face, hairstyle and clothing of their own reference "
+            f"sheet through every hard cut: stable facial identity, one face per subject. "
+            f"{_HANDS_LINE}")
     elif has_host:
-        defs.append("There is exactly one person on screen from beginning to end, <Subject 1>. "
-                    "No other person, hand or body part belonging to anyone else may appear.")
+        # ★同样改正向。⚠原文 "No other person, hand or body part ... may appear" 在胸挂 POV 片上
+        #   与机位句"拍摄者的手会入画"**直接打架** —— 又是一处自相矛盾,按 operator 分支写。
+        _op = (cfg.get("_profile") or {}).get("operator") or {}
+        defs.append(
+            "The frame contains exactly one person from beginning to end: <Subject 1>, "
+            "the only one on camera. She has exactly two hands" +
+            (", and the only additional hands are the off-camera wearer's, entering from the "
+             "bottom or side edge." if _op.get("hands_visible") else
+             ", and hers are the only hands in frame."))
 
     if need_fd:
         _WARN_FORMDESC.update(need_fd)
@@ -529,16 +907,27 @@ def build(seg, shots, cfg, en):
     t0 = float(seg["start"])
     body, appear = [], {}
     for i, s in enumerate(shots):
-        act = _strip_onscreen(s.get("action", ""))
-        # ★旁白镜:把动作里的"说话"剔掉,否则和下面那句"不许动嘴"自相矛盾(见 _strip_talking)
-        if s.get("voice_mode") == "voiceover":
-            act = _strip_talking(act)
+        act = _clean_action(s, seg, cfg)      # ★与 summary 同一口径,见 _clean_action
         head = "[Shot 1]" if i == 0 else f"[Shot {i+1}] At {_fmt_ts(s['start'] - t0)}, a hard cut to"
         size_cam = " ".join(x for x in (E(s.get("shot_size", "")), E(s.get("camera", ""))) if x)
         line = f"{head} {size_cam}. {E(act) or act}."
-        # ★先用 speaker_tag 的标注(有图像/音色依据),没有才退回启发式
-        vl = _voice_line(s, roles, cast_ids, has_cast) if has_cast else None
-        if vl is not None:
+        # ★有 speech_turns(轮次时间轴)时,口型由 speech_timeline 统一发,这里不再逐镜发 ——
+        #   两处都发就是"两句话打架"(本项目头号病),而且逐镜那句必然更粗。
+        # ★★这里的 None 曾经是个哑弹(08-23 修)。上面那条注释写的是"有 speech_turns 时
+        #   这里不再逐镜发口型",但代码把 vl 置成 None 之后,None 恰好落进下面的
+        #   `elif has_cast` —— 逐镜那句照发不误。于是 S2 的提示词里同时写着:
+        #     「<Subject 1> is the one speaking in this shot(整整 14 秒)」
+        #     「00.00-06.80 OFF(画外的人在说,画面里所有人闭嘴)」
+        #   一句话把整段音轨派给周周对口型,另一句说其中 11.3 秒不是她说的。
+        #   **模型只会挑一句听**,而它挑的是前者 —— 这就是"女主和拍摄者说话分不清"。
+        #   头号病第 10 次,而且是被一条"说自己已经修好了"的注释盖住的。
+        #   教训:注释说"不再发"的时候,要有一个**显式的哨兵**,别指望 None 自己会消失。
+        by_timeline = bool(s.get("speech_turns"))    # 口型归 speech_timeline 管,本行不发
+        vl = None if by_timeline else (
+            _voice_line(s, roles, cast_ids, has_cast) if has_cast else None)
+        if by_timeline:
+            pass
+        elif vl is not None:
             line += vl
         elif has_cast:
             # ★口型必须挂在【具体某个 Subject】上。08-13 前这里只有 host 分支,多人物片
@@ -555,7 +944,7 @@ def build(seg, shots, cfg, en):
                 else:
                     line += (" The character at the centre of frame is the one speaking; "
                              "their lip movement follows <Audio 1> precisely. Every other "
-                             "character keeps a closed, relaxed mouth.")
+                             "character listens with lips together.")
             else:
                 line += (" There is no speech in this segment; every character keeps "
                          "a closed, relaxed mouth. Do not animate talking.")
@@ -592,8 +981,10 @@ def build(seg, shots, cfg, en):
     ret.append("<Audio 1> (spans the whole video): fully_preserved - reused directly as the "
                "complete audio layer.")
 
-    acts = [x for x in ((E(_strip_onscreen(s.get("action", ""))) or
-                         _strip_onscreen(s.get("action", ""))) for s in shots) if x]
+    # ★必须和 detailed_description 用同一份剥过的动作(_clean_action),否则 summary 会
+    #   把逐镜已删掉的"说话/计时器"又说一遍 —— 本项目头号病"提示词自相矛盾"的第六次。
+    acts = [x for x in ((E(_clean_action(s, seg, cfg)) or _clean_action(s, seg, cfg))
+                        for s in shots) if x]
     beats = []
     for i, x in enumerate(acts):
         x = x.rstrip(" .。")
@@ -603,26 +994,49 @@ def build(seg, shots, cfg, en):
     #   "Her mouth movement follows <Audio 1>",连说话的是谁都是错的。口型归属已在
     #   detailed_description 里逐镜挂到具体 Subject,summary 只需中性带过。
     if speaking:
-        tail = (" The on-camera characters' mouth movement follows <Audio 1> exactly, "
-                "as specified per shot below." if has_cast else
+        _bytl = any(x.get("speech_turns") for x in shots)
+        tail = ((" The on-camera characters' mouth movement follows <Audio 1> exactly, "
+                 + ("as specified in the speech_timeline below." if _bytl
+                    else "as specified per shot below.")) if has_cast else
                 " Her mouth movement follows <Audio 1> exactly." if has_host else "")
     else:
         tail = ""
-    summary = (f"In {E(env) or env}: " + "; ".join(beats) + "." + tail)
+    # ★summary 里的地点也必须走 _clean_scene_desc。08-22 第一遍只洗了 subject_definitions
+    #   那一处出口,summary 仍贴着逐镜 scene 原文("其他行人及亮灯的商铺"),矛盾闸照样报 ——
+    #   **和 action 那个漏洞完全同形:同一样东西有多个出口,洗一个不够。**
+    _env2 = _clean_scene_desc(env, no_text="Readable text (hard)" in (
+        cfg.get("extra_constraints") or {}).get(seg["seg"], ""))
+    summary = (f"In {E(_env2) or _env2}: " + "; ".join(beats) + "." + tail)
 
-    return "\n".join([
+    # ★换景别与口型表【必须一起算、一起发】:framing 一开,speech_timeline 的 OFF 口径
+    #   就得跟着改(见该函数里的注释)。分两处各算各的必然走散。
+    #   开关:assets.json 的 "off_window_framing": true,或 h3_prompt --off-framing on。
+    _ft = None
+    if has_cast and cfg.get("off_window_framing"):
+        _ft = framing_timeline(shots, roles, cast_ids, subj_ids, t0,
+                               float(seg["duration"]), cfg.get("_profile") or {})
+        if _ft:
+            _OFF_FRAMED[seg["seg"]] = [l.strip() for l in _ft.split("\n") if l.endswith(" B")]
+    _st = speech_timeline(shots, roles, cast_ids, t0, framing=bool(_ft)) if has_cast else None
+
+    def _assemble(ft, st):
+        return "\n".join([
         "subject_definitions:", *defs, "",
         "summary:", summary, "",
         "retention_analysis:", *ret, "",
         "detailed_description:",
-        # ★三种片型三种机位语言:自拍口播≠街采≠产品空镜。多人物片写 "selfie framing"
-        #   会让模型把街采硬掰成自拍臂长构图(而原片是旁观机位)。
-        "Handheld front-facing phone selfie framing, vertical 9:16, natural light, "
-        "realistic everyday texture." if has_host else
-        "Handheld observational camera, vertical 9:16, available ambient light, "
-        "realistic documentary texture." if has_cast else
-        "Vertical 9:16, natural light, realistic product-photography texture.", "",
+        # ★机位语言:有立项档案就按 rig 发(08-21 起),没有才退回旧的三分法。
+        #   旧的三分法猜不出"胸挂第一视角"这种 —— 榴莲千层就是这么被拍成旁观视角的。
+        (_RIG + " Vertical 9:16, available ambient light, realistic documentary texture.")
+        if _RIG else
+        ("Handheld front-facing phone selfie framing, vertical 9:16, natural light, "
+         "realistic everyday texture." if has_host else
+         "Handheld observational camera, vertical 9:16, available ambient light, "
+         "realistic documentary texture." if has_cast else
+         "Vertical 9:16, natural light, realistic product-photography texture."), "",
         *[b + "\n" for b in body],
+        *([ft, ""] if ft else []),
+        *([st, ""] if st else []),
         "overall_soundscape: <Audio 1> is reused directly as the complete and only audio layer "
         "across the whole video. Do not generate any additional narration, voice or speech "
         "beyond <Audio 1>.", "",
@@ -642,7 +1056,19 @@ def build(seg, shots, cfg, en):
         #   所以补丁必须写进 assets.json 的 extra_constraints,由这里注入。
         *([(cfg.get("extra_constraints") or {}).get(seg["seg"], "")]
           if (cfg.get("extra_constraints") or {}).get(seg["seg"]) else []),
-    ]), pics
+        ])
+
+    txt = _assemble(_ft, _st)
+    # ★超长时【先丢换景别】,别让整段必死。h3 的 7000 字符是硬墙,而本项目的提示词
+    #   已经贴着墙跑(08-23 实测最长的一段只剩 9 字符余量)—— 任何新增内容都会把某些段
+    #   顶出去。换景别是【可选增益】,人设/产品/环境定义是【不能丢的地基】,
+    #   所以撞墙时牺牲的必须是它。⚠丢了要在汇总里点名,不许静默降级。
+    if len(txt) > MM_PROMPT_MAX and _ft:
+        _OFF_DROPPED[seg["seg"]] = len(txt) - MM_PROMPT_MAX
+        _OFF_FRAMED.pop(seg["seg"], None)
+        txt = _assemble(None, speech_timeline(shots, roles, cast_ids, t0, framing=False)
+                        if has_cast else None)
+    return txt, pics
 
 
 def main():
@@ -654,14 +1080,27 @@ def main():
     ap.add_argument("--no-write-plan", action="store_true",
                     help="不把提示词灌回 plan(旧行为)。⚠不灌回 gen_segments 会用旧提示词")
     ap.add_argument("--no-translate", action="store_true", help="不调 Ark 翻译,中文原样留给 agent 润色")
+    ap.add_argument("--no-tr-cache", action="store_true",
+                    help="不用译文缓存,全部重译(默认复用 <run>/_translate_cache.json —— "
+                         "缓存让同一份中文每次得到同一句英文,A/B 对照才干净)")
+    ap.add_argument("--off-framing", choices=["auto", "on", "off"], default="auto",
+                    help="画外音窗口换景别(低头看手,人脸只留到肩)。"
+                         "auto=听 assets.json 的 off_window_framing;on/off=本次强制")
     a = ap.parse_args()
 
     segs = json.load(open(a.plan))
     segs_raw = json.loads(json.dumps(segs))   # 深拷贝,用于 .bak_h3 备份
     sl = {str(s["shot_id"]): s for s in json.load(open(a.shotlist))["shots"]}
     cfg = json.load(open(a.assets))
+    if a.off_framing != "auto":
+        cfg["off_window_framing"] = (a.off_framing == "on")
     cfg["_cast"] = load_cast(a.assets, cfg)
     cfg["_scenes"] = load_scene(a.assets)
+    cfg["_profile"] = load_profile(a.assets)
+    if cfg["_profile"]:
+        _op = cfg["_profile"].get("operator") or {}
+        print(f"[h3] 立项档案: 机位={cfg['_profile'].get('rig')} "
+              f"拍摄者出镜={_op.get('on_camera')} 说话={_op.get('speaks')}")
     if cfg["_scenes"]:
         print(f"[h3] 场景板 {len(cfg['_scenes'])} 个: {list(cfg['_scenes'])}")
     if cfg["_cast"]:
@@ -681,12 +1120,21 @@ def main():
             for k in ("shot_size", "camera", "scene"):
                 if s.get(k):
                     pool.add(s[k])
-            act = _strip_onscreen(s.get("action", ""))
-            if s.get("voice_mode") == "voiceover":
-                act = _strip_talking(act)      # ★与 build 同口径,否则池里没有剥过的句子
+                    if k == "scene":       # 逐镜 scene 在正文里是洗过的,池里也得有洗过的那份
+                        pool.add(_clean_scene_desc(s[k], no_text=True))
+                        pool.add(_clean_scene_desc(s[k], no_text=False))
+            # ★必须调 _clean_action —— 与 build 完全同一口径。这里以前是把 build 的三步
+            #   剥法【抄】了一遍,08-22 给 _clean_action 加了 _strip_printing 之后这份抄件
+            #   没跟着改,于是池里的句子和正文要翻的句子对不上、**翻译直接落空**,
+            #   S1 的 summary 整段中文原样进了英文提示词。同一份逻辑不要抄第二份。
+            act = _clean_action(s, seg, cfg)
             if act:
                 pool.add(act)
     pool |= set((cfg.get("form_desc") or {}).values())
+    # ★场景板 desc 从来没进过翻译池(08-22 才发现)——于是 <Subject N> is the environment
+    #   那一整句在英文提示词里一直是中文,每段 75 字,小禾家那条也一样。
+    #   h3 正文要英文,中英混排等于把这句话的权重打了折。
+    pool |= {v.get("desc", "") for v in (cfg.get("_scenes") or {}).values()}
     # ★角色名与 desc 也要进翻译池:漏了它们,人设定义会中英混排(h3 正文要英文)
     pool |= {x for r in cfg["_cast"] for x in (r["name"], r["desc"])}
     pool |= {cfg.get("host_desc", ""), cfg.get("product_desc", "")} | set(
@@ -695,24 +1143,45 @@ def main():
     # ★翻译失败必须响亮 + 阻断:h3 要英文正文,中文提示词是残次品,静默放行等于
     #   把废稿喂给收费 API(08-09 蕾蕾片 ConnectTimeout 后照样提交,靠审查拦下才没白花钱)。
     #   想要中文占位只有一条合法路径:显式 --no-translate。
+    # ★译文缓存(08-23 补)。两个原因,都很实在:
+    #   ①**可复现**:同一份中文每次重译措辞都不一样("盘发"一次译 loose updo、
+    #     一次译 loosely tied up)。做 A/B 时两条臂各译各的,差异里混进了翻译噪声,
+    #     根本分不清是改动起的作用还是措辞起的作用 —— 08-23 换景别对照实撞。
+    #   ②顺带省钱省时:每跑一次 h3_prompt 就是一次全量翻译调用。
+    #   键是中文原文本身,源文一改就自然是新键,不存在读到旧译文的风险。
+    trc = os.path.join(os.path.dirname(os.path.abspath(a.assets)), "_translate_cache.json")
+    cache = {}
+    if not a.no_tr_cache and os.path.exists(trc):
+        try:
+            cache = json.load(open(trc, encoding="utf-8"))
+        except Exception as e:
+            print(f"[h3][⚠] 译文缓存读取失败({type(e).__name__}),本次全量重译", file=sys.stderr)
     en = {}
     if not a.no_translate:
+        hit = {x: cache[x] for x in pool if x in cache}
+        pool = {x for x in pool if x not in hit}
+        if hit:
+            print(f"[h3] 译文缓存命中 {len(hit)} 条,待译 {len(pool)} 条 ({trc})")
+        en.update(hit)
         last = None
-        for attempt in range(3):
+        for attempt in range(3) if pool else []:
             try:
-                en = translate({x: "" for x in sorted(pool)})
+                en.update(translate({x: "" for x in sorted(pool)}))
                 break
             except Exception as e:
                 last = e
                 print(f"[h3] 翻译第{attempt+1}次失败: {e}", file=sys.stderr)
                 import time as _t; _t.sleep(5 * (attempt + 1))
-        if not en:
+        if pool and not any(x in en for x in pool):
             sys.exit(f"[h3][中止] 翻译三次均失败({last})。h3 要英文正文,中文提示词是残次品,"
                      f"不能提交。请检查网络/ARK_API_KEY 后重跑;确实要中文占位请显式加 --no-translate")
         miss = [x for x in pool if x not in en]
         if miss:
             print(f"[h3][⚠] {len(miss)} 条未译回,将保留中文: {miss[:3]}", file=sys.stderr)
-    print(f"[h3] 待译短语 {len(pool)} 条,译回 {len(en)} 条"
+        if not a.no_tr_cache:
+            cache.update({k: v for k, v in en.items() if v})
+            json.dump(cache, open(trc, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    print(f"[h3] 本次新译 {len(pool)} 条,译文合计 {len(en)} 条"
           f"{'(--no-translate,全部保留中文)' if a.no_translate else ''}")
 
     # ★换品牌前置审计:分镜表描述的是【原品牌】产品的长相,锚图是【新品牌】的,
@@ -788,6 +1257,29 @@ def main():
         print(f"[h3] ★已灌回 {a.plan}:提示词 {n_p} 段、锚图 {n_i} 段(原件备份 {bak})\n"
               f"     —— 不灌回的话 gen_segments 会拿上一版旧提示词去生成,而且全程不报错。")
 
+    # ★长度闸(08-23 补)。08-21 speech_timeline 首版把提示词撑过 h3 的 7000 字符上限,
+    #   S1/S6/S7 三段**在提交时**才被拒(400/2013)—— 那次修完只改了措辞,没有留下任何
+    #   防复发的东西。任何往提示词里加内容的改动(换景别就是一个)都会再踩一次。
+    #   现在在**出片之前**就量出来:超长必然被拒,提前拦下比烧完再看日志便宜。
+    lens = {seg["seg"]: len(open(os.path.join(a.out_dir, f"{seg['seg']}_h3.txt")).read())
+            for seg in segs}
+    over = {k: v for k, v in lens.items() if v > MM_PROMPT_MAX}
+    _mx = max(lens.values()) if lens else 0
+    print(f"[h3] 提示词长度 最长 {_mx}/{MM_PROMPT_MAX} 字符"
+          f"({'余量 %d' % (MM_PROMPT_MAX - _mx) if not over else '★%d 段超长' % len(over)})")
+    if _OFF_FRAMED:
+        print(f"[h3] ★画外音换景别已开,{len(_OFF_FRAMED)}/{len(segs)} 段落了窗口"
+              f"(其余段或是纯画外、或窗口太短,按原景别):")
+        for k in sorted(_OFF_FRAMED):
+            print(f"    {k}: {' '.join(_OFF_FRAMED[k])}")
+    if _OFF_DROPPED:
+        print(f"[h3][⚠] {len(_OFF_DROPPED)} 段因提示词超长,换景别被丢掉(其余内容不动):"
+              f" {', '.join('%s(超%d字符)' % (k, v) for k, v in sorted(_OFF_DROPPED.items()))}"
+              f"\n    → 想让这些段也换景别,得先给提示词腾地方(exclude_forms 少挂图 / 精简 extra_constraints)")
+    if not _OFF_FRAMED and not _OFF_DROPPED and cfg.get("off_window_framing"):
+        print("[h3][⚠] 开了 off_window_framing 但没有任何段落窗口 —— "
+              "检查 profile.json 的 rig 是不是 chest_pov、operator 是否 speaks+hands_visible")
+
     print(f"[h3] {len(segs)} 段 → {a.out_dir}/<seg>_h3.txt + images.json")
     for seg in segs:
         print(f"  {seg['seg']:4} {len(seg['shots'])}镜 {seg['duration']}s "
@@ -803,6 +1295,17 @@ def main():
               "被拒再消毒;别预防性改写导致道具走形(08-09 教训):")
         for s, w in warns:
             print(f"  {s}: {w}")
+    if over:
+        print(f"\n[h3][★中止] {len(over)} 段超出 h3 的 {MM_PROMPT_MAX} 字符上限,提交必被拒(400/2013):",
+              file=sys.stderr)
+        for k, v in sorted(over.items(), key=lambda kv: -kv[1]):
+            print(f"    {k}: {v} 字符,超 {v - MM_PROMPT_MAX}", file=sys.stderr)
+        print("  → 削减手段(按代价从小到大):assets.json 的 exclude_forms 少挂一张产品图、"
+              "extra_constraints 精简、该段关掉 off_window_framing。\n"
+              "  ★提示词与 plan 都已写盘,改完重跑本脚本即可;这里退出只是不让你带着"
+              "必死的提示词去 gen_segments。", file=sys.stderr)
+        sys.exit(2)
+
     print(f"\n★下一步:人过一遍 {a.out_dir}/*.txt(尤其动作是否带全、锚图对不对),再跑\n"
           f"  python3 gen_segments.py {a.plan} --clips clips --audio-dir audio/seg "
           f"--mm-backend rh --i2v-backend rh --concurrency 3")
