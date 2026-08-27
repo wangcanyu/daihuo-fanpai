@@ -35,6 +35,34 @@ Higher = more likely to scale in paid traffic. Understanding-driven reconstructi
 → 7 export_subs (SRT + on-screen-text checklist) → 8 deliver (★JianYing draft | burned-subtitle final)
 ```
 
+### Two routes, picked by `route.py`
+
+```
+reverse → profile → ★route.py (classify the film)
+            ├─ main speaker ON camera (host monologue) → audio-driven (the pipeline above)
+            └─ main speaker OFF camera (camera operator / narrator)
+                 → verify_dialogue (3-source reconciliation) → human-corrected script
+                 → script_first.py  (dialogue goes INTO the prompt; the model speaks it itself)
+                 → gen_jimeng_par.py (parallel generation)
+```
+
+**Why split.** Off-camera speech has no face to attach to, so an audio-driven model can only
+assign it to someone who *is* on camera — that is the mechanism behind "the wrong person is
+talking". Put the dialogue in the prompt and let the model generate the voice, and attribution
+cannot be wrong, because the model decides who speaks. Measured on the same film (two arms,
+n=3, one shared frame grid): frames where an on-camera person's mouth is open **during
+off-camera speech** went from **27% (range 1–11, one roll in three blows up) to 5–13%, with no
+blow-up in six rolls**; dialogue was verbatim in 8/8 segments.
+
+**But do not use it for on-camera hosts.** There the voice must belong to that face, and with a
+single speaker there is no attribution ambiguity to fix — the benefit does not exist while the
+cost (losing the original voice) still applies. *The same change is a cure for one film type and
+a poison for another, which is why routing must come before generation.*
+
+⚠ The two backends have **opposite** language rules: **Jimeng requires Chinese prompts**
+(English makes it invent its own lines during silent windows); **h3 requires English body text**
+following the official spec (`<d>dialogue</d>` + `(Sx)` speaker IDs + `[audio reference]`).
+
 Stages hand off only through JSON files/folders — **pluggable**: swap the VLM, the video model, or the TTS by rewriting one script (contracts in `DESIGN.md`).
 
 ## Configuration (`config.py`, all env-overridable, no hardcoded secrets)
