@@ -16,7 +16,8 @@ gen_segments.py — 生成消费端(吃 plan_segments 的方案 → 串行调即
 import argparse, json, math, os, re, subprocess, time, urllib.request
 
 from config import DOWNLOAD_PROXY, jimeng_env
-DREAMINA = os.path.expanduser("~/.local/bin/dreamina")
+import config as _cfg
+DREAMINA = _cfg.dreamina_bin()
 # 即梦档位默认 seedance2.0_vip(14积分/秒)。
 # ★非VIP慢速档(seedance2.0,8积分/秒,便宜43%)【已判死,别用】:08-09 一枪 5 秒的任务
 #   排队 15 小时 40 分钟仍是 queue_status=Queueing,且全程占死非VIP并发槽、阻塞后续所有
@@ -38,12 +39,24 @@ def wav_dur(path):
         return 0.0
 
 
+def drive_wav(audio_dir, name):
+    """★.drive.wav 优先(08-23):cut_audio --speaker 产出的处理版音轨(operator 轮次已压低),
+    只喂生成,装配仍用原版 <name>.wav。时长与原版一致,fit_duration 用它量不偏差。"""
+    if not audio_dir:
+        return None
+    drv = os.path.join(audio_dir, f"{name}.drive.wav")
+    if os.path.exists(drv):
+        return drv
+    wav = os.path.join(audio_dir, f"{name}.wav")
+    return wav if os.path.exists(wav) else None
+
+
 def fit_duration_to_audio(seg, audio_dir):
     """★配音比规划时长长会被 assemble 掐掉半句话——口播段生成时长按实际 wav 自动上调(上限15s)"""
     if seg["type"] != "mm" or not audio_dir:
         return
-    wav = os.path.join(audio_dir, f"{seg['seg']}.wav")
-    if not os.path.exists(wav):
+    wav = drive_wav(audio_dir, seg["seg"])
+    if not wav:
         return
     ad = wav_dur(wav)
     if ad > seg["duration"] + 0.25:      # 留容差:配音恰好等长(如静音垫尾)不算超长,别误加时白烧积分
@@ -70,8 +83,8 @@ def submit(seg, audio_dir, model=None, res="720p"):
         cmd = [DREAMINA, "multimodal2video"]
         for img in seg["images"]:
             cmd += ["--image", img]
-        wav = os.path.join(audio_dir, f"{seg['seg']}.wav") if audio_dir else None
-        if wav and os.path.exists(wav):
+        wav = drive_wav(audio_dir, seg["seg"])
+        if wav:
             cmd += ["--audio", wav]
         cmd += ["--prompt", seg["prompt"], "--duration", dur, "--ratio", "9:16",
                 "--model_version", model, "--video_resolution", res, "--poll", "0"]
@@ -80,7 +93,11 @@ def submit(seg, audio_dir, model=None, res="720p"):
         #   出来就是 960x960,装配硬塞进 1080x1920 只能裁或加黑边,整段废,
         #   而脚本层面一声不吭(08-11:9 段全中,是用户看即梦后台才发现的)。
         #   约定:fit_anchor.py 产出的同名 *_916.png 若在,一律优先用。
-        anchor = seg["anchor"]
+        # ★anchor 兜底:规划器只填了 images 没填 anchor 时取首图,否则 re.sub 吃 None 整段崩
+        #   (09-16 实撞:B模式 S1/S4/S6 anchor=null,jimeng 腿四段全废,mmh3 腿不受影响)
+        anchor = seg.get("anchor") or (seg.get("images") or [None])[0]
+        if not anchor:
+            raise ValueError(f"{seg.get('seg')}: i2v 段缺 anchor/images,无法提交")
         cand = re.sub(r"\.(png|jpg|jpeg)$", "_916.png", anchor, flags=re.I)
         if cand != anchor and os.path.exists(cand):
             anchor = cand
@@ -181,8 +198,7 @@ def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
     try:
         if seg["type"] == "mm":
             fit_duration_to_audio(seg, audio_dir)
-            wav = os.path.join(audio_dir, f"{name}.wav") if audio_dir else None
-            wav = wav if (wav and os.path.exists(wav)) else None
+            wav = drive_wav(audio_dir, name)
             tid = use.submit_mm(seg["images"], wav, seg["prompt"],
                                 duration=seg["duration"], resolution=res, ratio="9:16")
         else:
@@ -283,8 +299,9 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
         name = seg["seg"]; dst = os.path.join(clips_dir, f"{name}.mp4")
         tag = {"mm": "口播", "i2v": "image2video"}[seg["type"]]
         # ★替代后端: i2v 段可走 Ark/小云雀/RH; mm 口播段目前只有即梦和 RH 海螺能对口型
-        use = alt if seg["type"] == "i2v" else (mm_alt if seg["type"] == "mm" else None)
-        use_name = i2v_backend if seg["type"] == "i2v" else mm_backend
+        # ★串行路也要过 _backend_of(08-23 实撞):--auto-leg 之前只对并发池生效,
+        #   concurrency=1 时 8 段全落即梦,派发表白打。
+        use, use_name = _backend_of(seg)
         if use is not None:
             print(f"\n===== {name} {tag} {seg['duration']}s [{use_name}] =====", flush=True)
             if dry:
@@ -292,8 +309,7 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
             try:
                 if seg["type"] == "mm":
                     fit_duration_to_audio(seg, audio_dir)
-                    wav = os.path.join(audio_dir, f"{name}.wav") if audio_dir else None
-                    wav = wav if (wav and os.path.exists(wav)) else None
+                    wav = drive_wav(audio_dir, name)
                     tid = use.submit_mm(seg["images"], wav, seg["prompt"],
                                         duration=seg["duration"], resolution="720p", ratio="9:16")
                 else:
@@ -354,7 +370,7 @@ if __name__ == "__main__":
                     help="口播段后端: jimeng(积分池,产品形体锚定最准) / mmh3(★H3最便宜,平面印刷图案强) / rh(同模型贵5倍)")
     ap.add_argument("--jimeng-model", default=None,
                     help=f"即梦档位,默认 {JIMENG_MODEL}(14积分/秒)。"
-                         "★非VIP seedance2.0 虽便宜43%但排队实测15小时+且占死槽位,已判死;"
+                         "★非VIP seedance2.0 虽便宜43%%但排队实测15小时+且占死槽位,已判死;"
                          "seedance2.5=26积分/秒、时长上限30s,只用于物理动作难的镜")
     ap.add_argument("--jimeng-res", default="720p",
                     help="即梦分辨率,默认720p。1080p/4k 仅 seedance2.0_vip 支持")

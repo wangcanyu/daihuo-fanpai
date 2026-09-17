@@ -87,42 +87,16 @@ def _strip_onscreen(action):
 
 
 def translate(items):
-    """中文短语批量译英(Ark Seed,一次调用)。失败则原样返回中文,不阻断管线。"""
+    """中文短语批量译英(Ark Seed,一次调用;套餐/按量由 _ark_json 统一路由,08-23 起)。"""
     if not items:
         return {}
     try:
-        import requests
-        from config import ark_endpoint, ARK_SEED_MODEL
+        from seed_reverse import _ark_json
         payload = json.dumps(items, ensure_ascii=False)
         prompt = ("把下面 JSON 里每个中文短语翻成简洁、可直接用于视频生成提示词的英文,"
                   "保持镜头术语准确(景别/运镜/动作),不要加任何解释或修饰。"
                   "严格返回同键的 JSON,值为英文字符串,不要代码块围栏。\n" + payload)
-        body = {"model": ARK_SEED_MODEL,
-                "input": [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
-                "thinking": {"type": "disabled"}, "stream": True}
-        # ★URL 也要跟着 ark_endpoint 走,见 judge.py 顶部注释
-        r = requests.post(ark_endpoint()[0].rstrip("/") + "/responses",
-                          headers={"Authorization": f"Bearer {ark_endpoint()[1]}",
-                                   "Content-Type": "application/json"},
-                          json=body, proxies={"http": None, "https": None},
-                          timeout=(10, 300), stream=True)
-        r.raise_for_status()
-        txt = ""
-        for line in r.iter_lines():
-            if not line:
-                continue
-            s = line.decode("utf-8", "ignore")
-            if s.startswith("data:"):
-                s = s[5:].strip()
-            if s == "[DONE]":
-                break
-            try:
-                ev = json.loads(s)
-            except Exception:
-                continue
-            if ev.get("type", "").endswith("output_text.delta"):
-                txt += ev.get("delta", "")
-        return json.loads(txt[txt.find("{"):txt.rfind("}") + 1])
+        return _ark_json([{"type": "input_text", "text": prompt}])
     except Exception as e:
         raise RuntimeError(f"{type(e).__name__}: {str(e)[:160]}")
 
@@ -253,7 +227,7 @@ RIG_CLAUSE = {
  # 8/8 段都发,而反推里只有 1 段含走路词(S8 甚至明写"三位路人站在镜头前")——
  # 成片每次切镜三个人就一起朝镜头走。**逐镜属性被写成了片级常量。**
  # 判据:一句"看起来永远成立"的话,如果只在 1/8 的镜里成立,它就不是片级常量。
- # 走动那半句改成 CHEST_POV_WALK,只在该镜反推确实含走路词时才追加。
+ # 走动那半句拆成了逐镜属性(见下方 RIG_MOTION),只在该镜反推确实含走路词时才追加。
  # 静止时用量化抖动措辞(低幅度手持 3cm 内),它不暗示任何人在移动。
  "chest_pov": ("Camera: a chest-mounted first-person action camera worn by the host. "
                "24mm wide-angle lens with slight barrel distortion, chest height, f/4 medium "
@@ -269,6 +243,26 @@ RIG_CLAUSE = {
  "tripod_fixed": "Camera: locked-off tripod shot; the framing does not move.",
 }
 
+# ★逐镜机位属性(08-23,缺陷⑤的修法):这些只在该镜确实成立时才发,不做片级常量。
+#   反例:旧版 chest_pov 常量里带着 "the frame moves with the wearer's steps",
+#   被注入 8/8 段,而反推里只有 S1 含走路词、S8 明写"三位路人【站在】镜头前" ——
+#   于是每次切镜三个人都莫名开始走路。一句"看起来永远成立"的话只在 1/8 的时候成立,
+#   就是逐镜属性被写成了片级常量。
+#   (走动句沿用 08-22 改写的条件式措辞:只断言"这一镜在走",不断言全片。)
+RIG_MOTION = {
+ "chest_pov": ("In this shot the wearer is walking, so the frame advances and sways "
+               "with the wearer's steps."),
+}
+# "在走路"的判词。⚠别用单字"走"——"拿走/带走"全是误伤;只认明确的行走词。
+WALK_RE = re.compile(r"迎面|走来|走去|走向|走动|走路|步行|迈步|边走边|walks?\b|walking|approach", re.I)
+
+
+def shot_is_walking(sh):
+    """这一镜的拍摄者/镜头是否在走动(看反推原文,不看措辞想象)。"""
+    txt = " ".join(str(sh.get(k) or "") for k in ("action", "camera", "subject", "scene"))
+    return bool(WALK_RE.search(txt))
+
+
 
 def load_profile(assets_path):
     run = os.path.dirname(os.path.abspath(assets_path))
@@ -282,29 +276,20 @@ def load_profile(assets_path):
         return {}
 
 
-# ★只在该镜确实在走时才追加的那半句(见 RIG_CLAUSE["chest_pov"] 注释)
-CHEST_POV_WALK = (" In this shot the wearer is walking, so the frame advances and sways "
-                  "with the wearer's steps.")
-_WALK_WORDS = ("\u8d70", "\u8fc8", "\u524d\u884c", "\u8fce\u9762", "\u884c\u8d70")  # 走/迈/前行/迎面/行走
-
-
-def shots_walking(shots):
-    """这一段的反推动作里到底有没有人在走。★只读反推原文,不猜。"""
-    t = " ".join((x.get("action") or "") + (x.get("subject") or "") for x in (shots or []))
-    return any(w in t for w in _WALK_WORDS)
-
-
 def rig_clause(prof, shots=None):
     if not prof:
         return None
     op = prof.get("operator") or {}
-    c = RIG_CLAUSE.get(prof.get("rig"))
+    rig = prof.get("rig")
+    c = RIG_CLAUSE.get(rig)
     if not c:
         return None
     hands = E_hands(op.get("desc") or "")
     c = c.format(hands=hands) if "{hands}" in c else c
-    if prof.get("rig") == "chest_pov" and shots is not None and shots_walking(shots):
-        c += CHEST_POV_WALK
+    # 逐镜机位属性:只有本段确有镜头在走时才发(段内任一镜在走即成立)
+    motion = RIG_MOTION.get(rig)
+    if motion and shots and any(shot_is_walking(s) for s in shots):
+        c += " " + motion
     return c
 
 
@@ -337,6 +322,8 @@ def speech_timeline(shots, roles, cast_ids, t0, framing=False):
             who = t.get("speaker")
             if who == "operator":
                 tag = "OFF"
+            elif who == "overlap":
+                tag = "OVERLAP"
             elif who:
                 r = next((x for x in roles if x["name"] == who), None)
                 tag = f"S{cast_ids[r['key']]}" if r else "ANY"
@@ -373,6 +360,9 @@ def speech_timeline(shots, roles, cast_ids, t0, framing=False):
                    f"every other character listens with lips together, small nods and natural blinks.")
     if "ANY" in used:
         key.append("  ANY = the person being filmed replies; every other character listens with lips together, small nods and natural blinks.")
+    if "OVERLAP" in used:
+        key.append("  OVERLAP = several people speak at once; the on-camera person answering "
+                   "may move their mouth naturally — do not freeze everyone mid-word.")
     if "SILENT" in used:
         key.append("  SILENT = nobody speaks; all mouths stay closed.")
     key += [f"  {a_:05.2f}-{b_:05.2f} {tag}" for a_, b_, tag in merged]
@@ -1068,7 +1058,38 @@ def build(seg, shots, cfg, en):
         _OFF_FRAMED.pop(seg["seg"], None)
         txt = _assemble(None, speech_timeline(shots, roles, cast_ids, t0, framing=False)
                         if has_cast else None)
+    # 丢了换景别仍超上限时,按压缩优先级表逐级压(见 _compact_prompt),压到哪级响亮报出
+    _raw_len = len(txt)
+    txt, _lv = _compact_prompt(txt, cap=MM_PROMPT_MAX)
+    if _lv:
+        print(f"  [h3][压缩] {seg['seg']} 提示词 {_raw_len} 字符超上限,"
+              f"已按优先级表压到 L{_lv} 级({len(txt)} 字符)", file=sys.stderr)
     return txt, pics
+
+
+# ★压缩优先级表(09-05,吸收上游 v6 压缩纪律):prompt 超 h3 的 7000 字符上限时,
+#   从下往上逐级删,每级删完仍超才升一级;动作/台词/口型指令/人数约束/Subject 定义永不删。
+#   各级都是"先压表述再删内容",删到哪一级会打印出来(别静默压,压过头会丢约束)。
+def _compact_prompt(text, cap=7000):
+    if len(text) <= cap:
+        return text, 0
+    t = text
+    # L1 风格修饰词(最不值钱)
+    for w in ("realistic documentary texture", "realistic product-photography texture",
+              "realistic everyday texture", ", available ambient light", ", natural light"):
+        t = t.replace(w, "")
+    if len(t) <= cap:
+        return t, 1
+    # L2 逐镜"钉死环境"长句 → 短句(防参考图带跑背景的意图保留,只缩字数)
+    t = re.sub(r"The shot stays inside <Subject (\d+)>; keep its background and lighting "
+               r"unchanged, and do not import the backdrop or colour cast of any reference "
+               r"picture\.", r"Stay inside <Subject \1>'s setting.", t)
+    if len(t) <= cap:
+        return t, 2
+    # L3 retention 逐镜列表 → 全镜(出场镜次表是 08-22 为"哪几镜同一张脸"加的,压成整段
+    #   会让跨镜身份约束变粗,到这一级已经算伤筋动骨,打印出来让人知道)
+    t = re.sub(r"\(appears in [^)]*\)", "(appears in all shots)", t)
+    return t, 3
 
 
 def main():
@@ -1116,7 +1137,8 @@ def main():
     pool = set()
     for seg in segs:
         for sid_ in seg["shots"]:
-            s = sl[str(sid_)]
+            # ★长镜拆子镜时 plan 标 3a/3b,shotlist 只有 3 —— 兜底回母镜(09-15 实撞)
+            s = sl.get(str(sid_)) or sl[str(sid_).rstrip("ab")]
             for k in ("shot_size", "camera", "scene"):
                 if s.get(k):
                     pool.add(s[k])
@@ -1207,7 +1229,7 @@ def main():
 
     manifest, warns = {}, []
     for seg in segs:
-        shots = [sl[str(x)] for x in seg["shots"]]
+        shots = [sl.get(str(x)) or sl[str(x).rstrip("ab")] for x in seg["shots"]]
         txt, pics = build(seg, shots, cfg, en)
         open(os.path.join(a.out_dir, f"{seg['seg']}_h3.txt"), "w").write(txt)
         manifest[seg["seg"]] = pics
@@ -1247,6 +1269,11 @@ def main():
             json.dump(segs_raw, open(bak, "w"), ensure_ascii=False, indent=1)
         n_p = n_i = 0
         for seg in segs:
+            # ★即梦腿别灌 h3 英文六段式:gen_segments 读 seg["prompt"] 通喂所有后端,
+            #   即梦该吃中文自然语言提示词(带@图片N/@音频N)。09-16 实撞:灌回把
+            #   jimeng 腿全覆盖成英文 <Picture N> 语法,用户抽查才抓到。
+            if (seg.get("leg") or "").lower() == "jimeng":
+                continue
             body = open(os.path.join(a.out_dir, f"{seg['seg']}_h3.txt")).read()
             if seg.get("prompt") != body:
                 seg["prompt"] = body; n_p += 1

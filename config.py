@@ -9,6 +9,21 @@ Ark API key 读取优先级:
 CosyVoice 位置:环境变量 COSYVOICE_HOME,默认 ~/CosyVoice
 """
 import os
+import shutil
+
+
+def dreamina_bin():
+    """即梦 CLI 路径。★别写死 ~/.local/bin/dreamina(08-23 实撞:那是 WSL 布局,
+    Windows 原生装在 ~/bin/dreamina.exe,写死的路径 subprocess 直接 WinError 2)。
+    顺序:PATH → WSL 惯例路径 → Windows 常见路径。"""
+    w = shutil.which("dreamina")
+    if w:
+        return w
+    for p in ("~/.local/bin/dreamina", "~/bin/dreamina.exe", "~/bin/dreamina"):
+        q = os.path.expanduser(p)
+        if os.path.exists(q):
+            return q
+    return os.path.expanduser("~/.local/bin/dreamina")   # 都找不到,返回惯例路径让报错信息可读
 
 
 # ★火山有两条计费口子,端点【不同】,key 也【不通用】(08-22 实测 401):
@@ -209,6 +224,26 @@ ARK_MODEL_PLATFORM = "doubao-seed-2-1-pro-260628"     # 按量:Pro(贵,准)
 ARK_MODEL_PLAN = "doubao-seed-2-1-turbo-260628"       # 套餐:只有 turbo
 ARK_SEED_MODEL = (os.environ.get("ARK_SEED_MODEL")
                   or (ARK_MODEL_PLAN if ark_use_plan() else ARK_MODEL_PLATFORM))
+
+# ★Agent Plan 套餐通道(08-23 加,治"按量付费烧错池子"):
+#   套餐 = /api/plan/v1/chat/completions + turbo,订阅内边际成本 0;
+#   按量 = /api/v3/responses + pro,按 token 计费。两条通道的【报文格式不同】,见
+#   seed_reverse._chat_content / _ark_plan_text。pro 不在 Agent Plan 支持列表。
+#   配置了 plan key 就一律走套餐,不走按量(防静默烧钱)。
+ARK_PLAN_URL = os.environ.get("ARK_PLAN_BASE_URL",
+                              "https://ark.cn-beijing.volces.com/api/plan/v1")
+ARK_PLAN_MODEL = os.environ.get("ARK_PLAN_MODEL", "doubao-seed-2-1-turbo-260628")
+
+
+def ark_plan_key():
+    """Agent Plan key;没配返回 None(调用方退回按量通道并应响亮提示)。"""
+    k = os.environ.get("ARK_PLAN_API_KEY")
+    if k and k.strip():
+        return k.strip()
+    p = os.path.expanduser("~/.config/daihuo-fanpai/ark_plan_key")
+    if os.path.exists(p):
+        return open(p).read().strip()
+    return None
 
 # 成片下载代理:全管线(火山/即梦/即梦CDN)均为国内直连,默认不走代理。
 # 极少数网络环境下载 CDN 需代理时,设 DAIHUO_DOWNLOAD_PROXY=http://127.0.0.1:7896。

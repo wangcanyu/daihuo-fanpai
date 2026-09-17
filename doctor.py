@@ -45,6 +45,8 @@ def check_dreamina():
 
 def check_ark():
     import config
+    if config.ark_plan_key():
+        return OK, f"反推走【Agent Plan 套餐】({config.ARK_PLAN_MODEL},订阅内,不计 token 费)"
     ok, msg = config.ark_key_status()
     if ok:
         # ★如实报【实际走哪条计费口子 + 哪个模型】。08-22 之前这里只写"Seed2.1Pro key",
@@ -57,8 +59,10 @@ def check_ark():
                 msg += " (套餐无 pro,turbo 平替)"
         except Exception:
             pass
-        return (OK, "反推key " + msg)
-    return (BAD, "反推key缺失 → 设环境变量 ARK_API_KEY 或 ARK_PLAN_KEY(见 config.py)")
+        # 能走到这 = 没配 plan key(上面已 return),只剩按量口子在烧钱 → WARN 提醒
+        return WARN, ("反推走【按量付费 pro】(真花钱!)。配 Agent Plan key 省这笔钱: "
+                      "~/.config/daihuo-fanpai/ark_plan_key 或 ARK_PLAN_KEY。按量 key " + msg)
+    return BAD, "反推key缺失 → 设 ARK_PLAN_KEY(套餐,推荐)或 ARK_API_KEY(按量)"
 
 
 def check_kimi():
@@ -180,6 +184,22 @@ def check_jianying():
     return OK, f"pyJianYingDraft + 草稿目录就位({d})"
 
 
+def check_voice():
+    # qc_voice 声纹聚类(可选,speaker_tag 的第二证据腿):重型,装在 ~/.venv-voice,
+    # qc_voice 缺 import 时会自动换该 venv 重跑;缺则 speaker_tag 走纯 VLM 单腿(旧行为)
+    vpy = os.path.expanduser(r"~/.venv-voice/Scripts/python.exe" if os.name == "nt"
+                             else "~/.venv-voice/bin/python")
+    if os.path.exists(vpy):
+        r = subprocess.run([vpy, "-c", "import speechbrain, soundfile, torch"],
+                           capture_output=True)
+        if r.returncode == 0:
+            return OK, f"~/.venv-voice 就位(声纹对账可用,{vpy})"
+        return WARN, f"~/.venv-voice 在但依赖不全 → {vpy} -m pip install speechbrain soundfile torch"
+    return WARN, ("qc_voice 依赖未装 → 重型可选,不自动装。装法: python3 -m venv ~/.venv-voice && "
+                  "~/.venv-voice/bin/pip install speechbrain soundfile torch(Win 用 Scripts/pip.exe);"
+                  "缺则 speaker_tag 走纯 VLM(旧行为)")
+
+
 def check_proxy():
     # 全管线(火山API/即梦CLI/即梦CDN下载)均国内直连,无需任何代理。
     # 系统若设了全局 http_proxy,脚本已显式绕开;极少数网络下载 CDN 需代理时设 DAIHUO_DOWNLOAD_PROXY。
@@ -195,6 +215,7 @@ def main():
               ("RunningHub海螺(付费腿,可选)", check_rh),
               ("CosyVoice(配音)", check_cosyvoice),
               ("Seed-VC(换声,可选)", check_seedvc),
+              ("声纹对账(可选)", check_voice),
               ("剪映草稿交付", check_jianying), ("代理", check_proxy)]
     print("===== 复刻 skill 环境体检 =====")
     blockers = []

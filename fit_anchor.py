@@ -20,7 +20,8 @@ fit_anchor.py — 把产品锚图扩成 9:16 竖构图(即梦 image2image 5.0 @2
 """
 import argparse, os, re, subprocess, sys, urllib.request
 
-DREAMINA = os.path.expanduser("~/.local/bin/dreamina")
+import config as _cfg
+DREAMINA = _cfg.dreamina_bin()
 TARGET = 9 / 16
 TOL = 0.08          # 与 0.5625 的相对偏差超过这个就算"不是竖图"
 

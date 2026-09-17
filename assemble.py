@@ -60,10 +60,17 @@ def run(plan_path, clips_dir, audio_dir, out, trim_to_plan=False, master_audio=N
                 cut = ["-t", f"{t:.3f}"]; vd = t
         nv = os.path.join(work, f"{name}.mp4")
         W, H = size.lower().split("x")
+        # ★-r 30 统一 CFR(08-23 实撞):即梦片段声明 60fps 时间基(实为 24fps 内容),
+        #   与 H3 的 24fps 混着 concat -c:v copy,时间戳互相覆盖,8×14s 拼出 89.4s。
+        #   归一化阶段统一成 CFR,concat 才能流拷贝。
         subprocess.run(["ffmpeg", "-y", "-i", clip, "-an"] + cut +
                        ["-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p",
-                        "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-                               f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1",
+                        # ★09-12 改:补边→裁切铺满。mmh3 的 768P 原生是 768×1344(4:7),按 9:16 画布
+        #   缩放后 pad 会在上下各留 9px 黑边(抽帧实拍到 0-11px 与 1271-1279px 全黑)。
+        #   改成 increase+crop:放大到铺满画布再居中裁掉溢出(本片 768→720 宽裁 ~0.8%),
+        #   肉眼无感,黑边消失。
+        "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1",
+                        "-r", "30",
                         nv, "-loglevel", "error"], check=True)
         norm_list.append(nv)
         # 2) 段配音 pad 到视频时长(无配音则纯静音)

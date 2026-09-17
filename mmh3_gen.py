@@ -140,6 +140,10 @@ def _submit(prompt, images=(), audios=(), videos=(), duration=5,
     for p in list(videos)[:3]:
         content.append({"type": "video_url", "video_url": {"url": _as_url(p)},
                         "role": "reference_video"})
+    # ★音频条数上限 3,但还有第二道闸:**所有音轨时长合计 ≤15 秒**(08-23 多音频探针实测,
+    #   2×14s 提交即 400 "reference audio total duration must not exceed 15 seconds (2013)")。
+    #   想给段喂"主角轨+operator轨"双轨做说话人路由时,段长 >7.5s 就放不下两条等长轨,
+    #   要么缩短段,要么退回单轨 drive.wav 方案。此处不预检——服务端报错信息已足够直白。
     for p in list(audios)[:3]:
         content.append({"type": "audio_url", "audio_url": {"url": _as_url(p)},
                         "role": "reference_audio"})

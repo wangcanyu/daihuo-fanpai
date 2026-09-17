@@ -6,7 +6,7 @@ judge.py — 评委(三看漏斗 90分制,生成后打分)
 可选传目标视频做"保真度"对比(A模式忠实复刻用)。
 用法: python3 judge.py final.mp4 [--target 原片.mp4] [--out judge.json]
 """
-import argparse, base64, json, os, re, subprocess, tempfile, time
+import argparse, base64, json, os, re, subprocess, sys, tempfile, time
 import requests
 
 # ★端点必须从 config.ark_endpoint() 取,别硬编码 /api/v3。
@@ -40,16 +40,22 @@ RUBRIC = """三看漏斗90分制(每项30):
 
 
 def call(video_paths, prompt, timeout=400):
-    """video_paths: 一个路径或路径列表(实测 Ark 支持一次传多个视频,可做真对比)。"""
+    """video_paths: 一个路径或路径列表(实测 Ark 支持一次传多个视频,可做真对比)。
+    ★08-23 起套餐优先:配了 ark_plan_key 走 Agent Plan(turbo,订阅内),否则按量 pro。"""
     if isinstance(video_paths, str):
         video_paths = [video_paths]
-    key = ark_endpoint()[1]
     budget = MAX_UPLOAD_MB // len(video_paths)  # 合并预算均分,防双视频超限断连
     content = []
     for vp in video_paths:
         b64 = base64.b64encode(open(_prep(vp, budget), "rb").read()).decode()
         content.append({"type": "input_video", "video_url": f"data:video/mp4;base64,{b64}"})
     content.append({"type": "input_text", "text": prompt})
+    from config import ark_plan_key
+    if ark_plan_key():
+        from seed_reverse import _ark_plan_text
+        return _ark_plan_text(content, timeout)
+    print("[judge] ⚠ 未配 Agent Plan key,走【按量付费】pro 通道", file=sys.stderr)
+    key = ark_key()
     body = {"model": ARK_MODEL,
             "input": [{"role": "user", "content": content}],
             "thinking": {"type": "disabled"}, "stream": True}

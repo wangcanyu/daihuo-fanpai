@@ -27,7 +27,7 @@ draft 模式若当前解释器缺该库,自动用 DAIHUO_JY_PYTHON(默认 ~/.ven
   python3 deliver.py segments.json --mode draft --drafts-dir "D:\\jianying\\JianyingPro Drafts" --name 我的项目
   python3 deliver.py segments.json --mode final --full output/FULL.mp4 [--bgm x.mp3]
 """
-import argparse, json, os, re, shutil, subprocess, sys
+import argparse, subprocess, json, os, re, shutil, subprocess, sys
 
 import config
 from export_subs import sentences, fmt_ts  # 复用切句/时间码
@@ -35,10 +35,13 @@ from export_subs import sentences, fmt_ts  # 复用切句/时间码
 
 # ── 路径:WSL ↔ Windows ─────────────────────────────────────────────
 def to_wsl(p):
-    """'D:\\x\\y' / 'D:/x/y' → '/mnt/d/x/y';已是 posix 路径则原样返回"""
+    """'D:\\x\\y' / 'D:/x/y' → '/mnt/d/x/y';已是 posix 路径则原样返回。
+    仅 WSL 有 /mnt/<盘符>;Windows 原生(Git Bash)下保持原路径,否则 isdir 全假。"""
     m = re.match(r"^([A-Za-z]):[\\/](.*)$", p)
     if m:
-        return f"/mnt/{m.group(1).lower()}/" + m.group(2).replace("\\", "/")
+        if os.path.exists(f"/mnt/{m.group(1).lower()}"):
+            return f"/mnt/{m.group(1).lower()}/" + m.group(2).replace("\\", "/")
+        return p
     return p
 
 
@@ -70,6 +73,10 @@ def build_entries(segs, seg_starts, timing):
             continue
         t0, vd = seg_starts[name]  # 段起点/段视频时长(秒)
         lines = (timing or {}).get(name)
+        # ★timing.json 两种形态都收:tts_segments 产 [行,行,...](逐句),
+        #   CosyVoice 单段一行的产 {"text","dur"} 单 dict(09-16 实撞 TypeError)
+        if isinstance(lines, dict):
+            lines = [lines]
         if lines:  # 精确路径:逐句真实时长
             off = 0.0
             for ln in lines:
@@ -145,7 +152,12 @@ def deliver_draft(segs, clips_dir, audio_dir, timing, drafts_dir, name,
         if not os.path.exists(src):
             missing.append(nm); continue
         clip = os.path.join(mat_dir, f"{nm}.mp4")
-        shutil.copy(src, clip)
+        # ★09-12:草稿素材也归一化到画布比例(否则 4:7 素材在 9:16 画布上留黑边)
+        subprocess.run(["ffmpeg", "-y", "-i", src, "-an",
+                        "-c:v", "libx264", "-crf", "20", "-preset", "veryfast",
+                        "-pix_fmt", "yuv420p",
+                        "-vf", f"scale={_w}:{_h}:force_original_aspect_ratio=increase,crop={_w}:{_h},setsar=1",
+                        "-r", "30", clip, "-loglevel", "error"], check=True)
         mat = jy.VideoMaterial(clip)
         # ★与 assemble --trim-to-plan 对齐:各后端产物都比规划跨度长(即梦下限4s/海螺5s),
         #   不裁则视频轨被撑长、而字幕轨是按原片时间轴排的 → 两轨对不上(08-09 李时珍片:
@@ -273,6 +285,9 @@ if __name__ == "__main__":
         if not a.drafts_dir:
             sys.exit("[deliver] draft 模式需要 --drafts-dir 或环境变量 DAIHUO_JY_DRAFTS")
         name = a.name or os.path.basename(os.path.dirname(os.path.abspath(a.plan))) or "daihuo_fanpai"
+        if name in ("run", "output"):   # 09-10:plan 在 <项目>/run/segments.json 时 basename 是
+            name = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(a.plan)))) or name
+            # "run",多条片子的草稿全撞名「run」(热敷披肩2 实撞)——往上取一级项目名
         deliver_draft(segs, a.clips, a.audio_dir, timing, a.drafts_dir, name,
                       trim_to_plan=a.trim_to_plan, size=a.size,
                       shotlist_path=a.shotlist, replace=a.replace)

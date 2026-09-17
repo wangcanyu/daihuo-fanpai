@@ -92,7 +92,33 @@ def main():
     ap.add_argument("--skip-head", type=float, default=0.2, help="丢掉 B 开头多少秒的起步抖动")
     ap.add_argument("--out", default=None, help="给了就直接按最佳切点拼出来")
     ap.add_argument("--xfade", type=float, default=0.0, help="微溶接时长(0=硬切)")
+    ap.add_argument("--parent-of-b", default=None,
+                    help="B 段的首帧来源 clip(续接链跟踪):记录进 seam_chain.json,"
+                         "距上次回锚 >2 代会响亮警告(上游 extension_depth 纪律)")
     a = ap.parse_args()
+
+    # ★续接三件套(09-05,吸收上游 v6.4/6.6):观察闸 + 链长上限 + delta 措辞
+    print("[seam] ★续接纪律自查(三条都过才拼):")
+    print("  ① 观察闸:B 的首帧必须来自【已验收】的 A 段实际产物(看过那段成片,"
+          "被拒/失败的段永不当父本),不是来自'计划里 A 应该长什么样'")
+    print("  ② delta 措辞:B 段的提示词只写相对首帧的【变化】,复述场景/外观静态状态的"
+          "句子全删(文字和像素打架时,文字是漂移指令)")
+    print("  ③ 首段收尾:将被续接的段,提示词结尾要'方向性活着'(保持运动势头,"
+          "别收死成静止),否则重合窗里挑不到活体帧")
+    if a.parent_of_b:
+        chain_p = "seam_chain.json"
+        chain = json.load(open(chain_p)) if os.path.exists(chain_p) else {}
+        parent_depth = chain.get(os.path.basename(a.parent_of_b), {}).get("depth", 1)
+        depth = parent_depth + 1
+        chain[os.path.basename(a.seg_b)] = {"parent": os.path.basename(a.parent_of_b),
+                                            "depth": depth}
+        json.dump(chain, open(chain_p, "w"), ensure_ascii=False, indent=1)
+        print(f"[seam] 链长跟踪:{os.path.basename(a.seg_b)} 距上次回锚 {depth} 代", end="")
+        if depth > 2:
+            print(" —— ★★超过 2 代!上游纪律:链式续接每代都把上一代误差当首帧继承,"
+                  "漂移会在后段累积爆发。**停下,从锚图重开一代再续**")
+        else:
+            print("(≤2 代,安全)")
 
     rows = pick(a.seg_a, a.seg_b, a.a_start, a.b_start, a.overlap, skip_head=a.skip_head)
     if not rows:
