@@ -338,6 +338,10 @@ async function upImg(el, kind, key){
     if(cb) cb.checked = true;
   }catch(e){ st.textContent = '\u2717 ' + e.message; }
 }
+function skipWarn(el){
+  const w = el.closest('.acts').querySelector('.skipwarn');
+  if(w) w.style.display = el.checked ? 'inline' : 'none';
+}
 function harvest(){
   const out={roles:[],products:[],scenes:[]};
   document.querySelectorAll('.card').forEach(c=>{
@@ -446,7 +450,10 @@ def render(d):
             f'<div class="acts">'
             f'<label><input type="checkbox"{" checked" if r["state"]=="confirmed" else ""}>确认无误</label>'
             f'<label><input type="checkbox">这其实是别人，拆开</label>'
-            f'<label><input type="checkbox">不用建资产</label>'
+            f'<label><input type="checkbox" onchange="skipWarn(this)">不用建资产</label>'
+            f'<span class="skipwarn" style="display:none;color:#b42318;font-weight:600">'
+            f'⚠ 他/她出现在 {r["n"]} 个镜头里 —— 没有身份来源的角色会被模型现编脸'
+            f'(撞脸/毁脸的通用机制,08-22 榴莲千层 S1 就是这么毁的)。确定不建？</span>'
             f'<label class="up">上传/替换人设图'
             f'<input type="file" accept="image/*" '
             f'onchange="upImg(this,\'cast\',\'{e(r["lib_id"] or r["name"])}\')"></label>'

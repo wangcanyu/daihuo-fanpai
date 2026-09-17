@@ -15,7 +15,8 @@ make_host.py — 生成主播/场景锚图(即梦 text2image 5.0 @2k,订阅内�
 """
 import argparse, json, os, re, subprocess, sys, time, urllib.request
 
-DREAMINA = os.path.expanduser("~/.local/bin/dreamina")
+import config as _cfg
+DREAMINA = _cfg.dreamina_bin()
 TAIL = "画面干净,不要任何文字、logo或水印。"
 
 

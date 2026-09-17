@@ -38,7 +38,8 @@ SCHEMA = """{
    "shot_id": 1, "start": 0.0, "end": 0.0,
    "is_opening_3s": false,
    "shot_size": "特写/近景/中景/远景",
-   "camera": "固定/推/拉/摇/移/跟 + 速度",
+   "camera_evidence": "该镜开始帧与结束帧的构图各是什么(景别/主体大小位置;先写观察再定camera)",
+   "camera": "固定/推/拉/摇/移/跟 + 速度(依据camera_evidence:主体连续变大=推,变小=拉,构图不变=固定)",
    "subject": "主体是谁/什么 + 画面位置",
    "action": "具体动作(力学级,主体+动作都要带全,别只写结果)",
    "scene": "环境",
@@ -49,6 +50,7 @@ SCHEMA = """{
    "product_role": "none(无产品) | dynamic(产品动态主体,质感不必极真) | hero_real(产品真实质感特写,如剖面/参刺/弹性,AI易翻车需真图锚定) | package_text(包装且文字需清晰,建议后期贴图)",
    "onscreen_text": "屏上所有贴字原文,无则空",
    "dialogue": "该镜对应台词(按时间对齐),无则空",
+   "audio_design": "声音设计三件套:{bgm: none|垫底|主导(BGM是内容驱动力) | sfx: 明显音效点(如ASMR/咔哒/撕拉,无则[]) | voice: 口播|旁白|无}",
    "key_colors": "画面关键物体颜色,尤其液体/产品颜色(这个字段帮你别漏爆点细节)"
  }]
 }"""
@@ -72,7 +74,9 @@ def _stamp(d):
 
 
 def run(cmd):
-    return subprocess.run(cmd, capture_output=True, text=True)
+    # Windows 中文路径下 ffprobe 输出含非 GBK 字节,显式 utf-8 防 UnicodeDecodeError
+    return subprocess.run(cmd, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
 
 
 def detect_cuts(video, thresh=0.3):
@@ -114,8 +118,64 @@ ADJUDICATE_PROMPT = """下图是 %d 组"候选剪辑点"的前后帧对照,从�
 只返回 JSON,不要围栏:{"real": [真剪辑的编号], "fake": [假切点的编号]}"""
 
 
+def _chat_content(content):
+    """Responses 格式(input_video/input_image/input_text)→ chat/completions 格式
+    (video_url/image_url 是对象,text 直给)。两套格式的字段名和嵌套都不一样,别混。"""
+    out = []
+    for it in content:
+        t = it.get("type")
+        if t == "input_text":
+            out.append({"type": "text", "text": it["text"]})
+        elif t == "input_video":
+            out.append({"type": "video_url", "video_url": {"url": it["video_url"]}})
+        elif t == "input_image":
+            out.append({"type": "image_url", "image_url": {"url": it["image_url"]}})
+        else:
+            raise ValueError(f"未知 content 类型: {t}")
+    return out
+
+
+def _ark_plan_text(content, timeout=300, max_tokens=32000):
+    """Agent Plan 套餐通道(juben-fantui 已量产验证:turbo + video_url base64 音画同步可用)。
+    ★turbo 的 thinking 常开 —— juben 实测关掉后台词层抽卡式崩(批间 0,0,0/0,0,2),
+      这里沿用,别为了快关掉。
+    ★plan 端点只认 plan key;429/5xx/断连递增退避(90/180/270s)。"""
+    from config import ark_plan_key, ARK_PLAN_URL, ARK_PLAN_MODEL
+    body = {"model": ARK_PLAN_MODEL, "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": _chat_content(content)}]}
+    last = None
+    for att in range(4):
+        try:
+            r = requests.post(ARK_PLAN_URL + "/chat/completions",
+                              headers={"Authorization": f"Bearer {ark_plan_key()}",
+                                       "Content-Type": "application/json"},
+                              json=body, proxies={"http": None, "https": None},
+                              timeout=(10, timeout))
+            if r.status_code == 429 or r.status_code >= 500:
+                raise RuntimeError(f"HTTP {r.status_code}: {r.text[:150]}")
+            r.raise_for_status()
+            j = r.json()
+            return j["choices"][0]["message"]["content"]
+        except (RuntimeError, requests.RequestException) as e:
+            last = e
+            if att < 3:
+                w = 90 * (att + 1)
+                print(f"  [plan {type(e).__name__} {str(e)[:80]}] {w}s 后重试(第{att+1}次)",
+                      flush=True, file=sys.stderr)
+                time.sleep(w)
+    raise last
+
+
 def _ark_json(content, timeout=300):
-    """调 Seed 拿 JSON。失败抛异常由调用方决定降级。"""
+    """调 Seed 拿 JSON。失败抛异常由调用方决定降级。
+    ★08-23 起套餐优先:配了 ark_plan_key 就全走 Agent Plan(turbo,订阅内);
+    没配才落回按量 pro —— 落回时响亮提示,按 token 计费是花了真钱的。"""
+    from config import ark_plan_key
+    if ark_plan_key():
+        txt = _ark_plan_text(content, timeout)
+        return json.loads(txt[txt.find("{"):txt.rfind("}") + 1])
+    print("[seed] ⚠ 未配 Agent Plan key,走【按量付费】pro 通道"
+          "(配法: ~/.config/daihuo-fanpai/ark_plan_key)", file=sys.stderr)
     from config import ark_key, ARK_SEED_MODEL
     body = {"model": ARK_SEED_MODEL, "thinking": {"type": "disabled"}, "stream": True,
             "input": [{"role": "user", "content": content}]}
@@ -242,15 +302,8 @@ def make_upload_clip(video, scale, keep_audio, workdir):
     return out
 
 
-def ark_reverse(clip_path, cuts, duration, timeout=600):
-    """调 Seed 2.1 Pro 原生视频反推,返回 JSON 文本"""
-    key = ark_endpoint()[1]
-    b64 = base64.b64encode(open(clip_path, "rb").read()).decode()
-    segs = []
-    bounds = sorted(set([0.0] + cuts + [duration]))
-    for i in range(len(bounds) - 1):
-        segs.append([bounds[i], bounds[i + 1]])
-    prompt = (
+def _reverse_prompt(duration, segs):
+    return (
         f"这是一个 {duration}秒 的竖屏带货短视频。ffmpeg 已检出硬切边界,把它切成 "
         f"{len(segs)} 个镜头段(秒):{json.dumps(segs, ensure_ascii=False)}\n"
         f"口播长镜可能超过15秒,你先按硬切如实标,生成时再拆。\n"
@@ -264,6 +317,34 @@ def ark_reverse(clip_path, cuts, duration, timeout=600):
         f"6.台词只收录真实人声:只出现在字幕/花字上而无对应人声的文字(短视频开头常有静音字幕残留),"
         f"只进 onscreen_text,严禁写进 dialogue 和 full_transcript。"
         f"7.onscreen_text 逐句原样采集屏上每条字幕/花字(保留自动字幕的错字),句间用;分隔。")
+
+
+def ark_reverse(clip_path, cuts, duration, timeout=600):
+    """调 Seed 原生视频反推,返回 JSON 文本。
+    ★★套餐优先(09-07 补):_ark_json 08-23 就套餐优先了,但视频反推这条主路
+      一直漏网走按量 pro —— 09-06 批量 300 条把账号跑到欠费(AccountOverdueError)
+      才发现。视频反推是这条管线里最重的调用,漏它等于没修。"""
+    from config import ark_plan_key
+    if ark_plan_key():
+        t0 = time.time()
+        content = [{"type": "input_video",
+                    "video_url": f"data:video/mp4;base64,{base64.b64encode(open(clip_path,'rb').read()).decode()}"}]
+        segs = []
+        bounds = sorted(set([0.0] + cuts + [duration]))
+        for i in range(len(bounds) - 1):
+            segs.append([bounds[i], bounds[i + 1]])
+        content.append({"type": "input_text", "text": _reverse_prompt(duration, segs)})
+        txt = _ark_plan_text(content, timeout=900, max_tokens=64000)
+        return txt, round(time.time() - t0, 1)
+    print("[seed] ⚠ 未配 Agent Plan key,视频反推走【按量付费】pro 通道(真烧钱)"
+          "(配法: ~/.config/daihuo-fanpai/ark_plan_key)", file=sys.stderr)
+    key = ark_key()
+    b64 = base64.b64encode(open(clip_path, "rb").read()).decode()
+    segs = []
+    bounds = sorted(set([0.0] + cuts + [duration]))
+    for i in range(len(bounds) - 1):
+        segs.append([bounds[i], bounds[i + 1]])
+    prompt = _reverse_prompt(duration, segs)
     body = {
         "model": ARK_MODEL,
         "input": [{"role": "user", "content": [

@@ -41,6 +41,11 @@ def apply_decisions(run, d, dry=False):
             splits.append(name or key)
         if r.get("skip"):
             if key in by_key:
+                n_shots = len(by_key[key].get("shots") or [])
+                if n_shots >= 2:
+                    print(f"  [⚠毁脸风险] 「{name or key}」出现在 {n_shots} 个镜头里仍被标了不建资产 —— "
+                          "没有身份来源的角色会被模型现编脸(08-22 榴莲千层 S1 撞脸/毁脸的机制)。"
+                          "确认这是刻意的再往下走。")
                 removed.append(name or key)
                 cast["roles"] = [x for x in cast["roles"] if x.get("key") != key]
                 by_key.pop(key, None)

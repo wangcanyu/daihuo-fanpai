@@ -22,6 +22,16 @@ import argparse, json, os, re, sys
 # applies_kw : 命中这些词 = 本段【需要】这条约束
 # present_kw : 提示词里出现任一 = 这条约束【已经在】(中英都列,h3提示词是英文)
 # 每条都写明「哪次翻车教的」,别删,它是这条规则的存在理由
+
+# ★09-08 两条闸的事实锚点,main() 启动时载入(见文件底部)
+_EVIDENCE_OK = False   # assets.json 里有非空 evidence 字段 = 有真证据图
+_PROMO_OK = False      # plan 同目录 facts.json 里 activity 非空 = 优惠有事实锚点
+_AUTH_RE = re.compile(r"白大褂|工牌|医生|专家|教授|证书|检测报告|专利|研究院|研究所|实验室数据|"
+                      r"lab coat|doctor|expert|professor|certificate|test report|patent|institute",
+                      re.I)
+_PROMO_RE = re.compile(r"清仓|秒杀|限时|限量|满减|包邮|到手价|优惠券|折扣|半价|便宜|"
+                       r"尾单|尾货|买一送|拍一发|赠品|福利价|免费送|划算|到手价|到手就是这个价")
+
 RULES = [
     dict(
         id="cast_count", name="人数硬约束",
@@ -248,6 +258,30 @@ RULES = [
         fix="要么给缺的那个人补一张人设图(make_cast_sheet)并加进 cast.json,"
             "要么改写动作描述让人数与在册角色一致 —— 但**不要两句话就这么放着**",
     ),
+    dict(
+        id="authority_evidence", name="权威暗示必须有证据锚点",
+        why="★09-08:没翻车,先抄别人的防线 —— 即创『权威感带货』skill 的四层事实账本:"
+            "权威感只许来自【可见商品事实+真证据】,不许来自虚构身份/仿报告/夸大结论,"
+            "连白大褂/工牌/机构布景这种『看起来像真专家』的布景级暗示都算伪造。"
+            "提示词里出现这类词而没有证据图锚点 = 在编权威",
+        applies_when=lambda seg, shots: True,
+        present_kw=[],
+        check_authority=True,
+        fix="两选一:①真有证据 → 拍证据图(报告/证书/包装标签),assets.json 加 evidence 字段,"
+            "提示词改成『展示这张图』;②没有 → 删掉权威暗示词,权威感改用"
+            "『可见商品事实 + 清楚的选择标准 + 克制语气』表达",
+    ),
+    dict(
+        id="promo_anchor", name="优惠词必须有事实包锚点",
+        why="★09-08 同来源:『没有明确优惠输入时,成片不得出现价格/折扣/赠品/限时/限量』。"
+            "复刻别人的片时,原片的『清仓/便宜』是【别人的活动】,照抄进自己的广告就是"
+            "虚假宣传 —— A 模式照抄原词也一样要确认这个活动你真的有",
+        applies_when=lambda seg, shots: True,
+        present_kw=[],
+        check_promo=True,
+        fix="要么在 plan 同目录放 facts.json 写上 activity(你真实在做的活动,"
+            "A模式照抄原片活动也算确认),要么把台词里的优惠词删掉",
+    ),
 ]
 
 
@@ -325,6 +359,16 @@ def check_segment(seg, shots, prompt, is_h3=False):
                     if "host_anchor" not in str(x) and "scene" not in str(x)]
             if not prod:
                 out.append((r, "本段提到产品,但参考图里只有主播/场景,没有任何产品图"))
+        elif r.get("check_authority"):            # 权威暗示词 ⇄ 证据锚点(assets 的 evidence 字段)
+            hit = sorted(set(_AUTH_RE.findall(p + " " + src)))
+            if hit and not _EVIDENCE_OK:
+                out.append((r, f"出现权威暗示词 {hit[:4]},但 assets 没有证据锚点"
+                               "(assets.json 无 evidence 字段) —— 没有真证据的权威感就是伪造"))
+        elif r.get("check_promo"):                # 优惠词 ⇄ 事实包锚点(facts.json 的 activity)
+            hit = sorted(set(_PROMO_RE.findall(seg.get("dialogue") or "")))
+            if hit and not _PROMO_OK:
+                out.append((r, f"台词里有优惠词 {hit[:4]},但事实包没有锚点"
+                               "(plan 同目录无 facts.json 或 activity 为空)"))
         elif r.get("forbid"):                     # 这类要求"不该出现在提示词里"
             hit = [k for k in r.get("applies_kw", []) if k in p]
             if r.get("applies_re"):
@@ -356,6 +400,14 @@ def main():
 
     segs = json.load(open(a.plan))
     sl = {str(s["shot_id"]): s for s in json.load(open(a.shotlist))["shots"]}
+    # ★09-08 两条新闸的事实锚点:证据看 assets 的 evidence 字段,优惠看 plan 同目录
+    #   facts.json 的 activity 字段。assets 没传 / facts.json 不存在 = 没有锚点。
+    global _EVIDENCE_OK, _PROMO_OK
+    if a.assets and os.path.exists(a.assets):
+        _EVIDENCE_OK = bool(json.load(open(a.assets)).get("evidence"))
+    _fp = os.path.join(os.path.dirname(os.path.abspath(a.plan)), "facts.json")
+    if os.path.exists(_fp):
+        _PROMO_OK = bool((json.load(open(_fp)).get("activity") or "").strip())
     # ★检查 h3 提示词时,参考图的真相在 prompts/images.json(那才是喂给模型的清单),
     #   不是 segments.json 里 plan 阶段留下的旧 images
     # ★★漂移闸(08-16 血案):`--prompts-dir` 会拿 prompts/ 覆盖 plan 再审 ——

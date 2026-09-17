@@ -6,15 +6,20 @@ localize_seed.py — B模式脚本改写(Seed2.1Pro 起草,★真喂千川弹药
 按蒸馏出的千川方法论改写成目标产品口播文案。这是"脚本skill"的自动初稿手,
 agent 再审+收合规。同类目=本地化,跨类目=理解重构(prompt 里说明)。
 
-facts.json 示例:
+facts.json 示例(★四层事实账本,09-08 借鉴即创权威感带货 skill):
 {"product":"高小参·鲜蒸海参","brand":"高小参","mode":"跨类目",
  "audience":"30-40岁女性","angle":"海参是天然胶原蛋白之王,抢胶原蛋白需求(同目标用户)",
- "activity":"拍2斤到手3斤+送一瓶海参酱油","facts":"渤海湾/开袋即食免泡免煮/参刺挺拔筋白肉厚/QQ弹/源头工厂",
+ "activity":"拍2斤到手3斤+送一瓶海参酱油(★留空=全文禁价格/优惠词,CTA 也只留行动)",
+ "facts":"渤海湾/开袋即食免泡免煮/参刺挺拔筋白肉厚/QQ弹/源头工厂(★只写用户明确给的和参考图清晰可读的)",
+ "evidence":"证据锚点:检测报告/证书/包装标签等用户【真有】的东西;没有就留空,留空=不得出现任何权威暗示",
  "redlines":"删明星背书不编;不写美容抗衰功效等医疗宣称;卖点收在天然胶原蛋白+优质蛋白+开袋即食"}
+
+四层账本:用户明确提供 > 参考图可见 > 保守表达(可以关注/适合想要…的人) > 必须省略
+(报告/证书/机构/数据/功效/用量/见效周期,没有锚点一律不写)。优惠缺失=不生成、不询问、不提及。
 
 用法: python3 localize_seed.py shotlist.json facts.json [--out script.txt] [--qc qianchuan]
 """
-import argparse, json, os, time, requests
+import argparse, json, os, sys, time, requests
 
 # ★端点必须从 config.ark_endpoint() 取,别硬编码 /api/v3。
 #   08-22 切套餐时只把【key】换成了 ark_endpoint()[1],URL 还钉在按量口子上,
@@ -37,7 +42,12 @@ def load_ammo(qc_dir):
 
 
 def call_seed(prompt, timeout=200):
-    key = ark_endpoint()[1]      # ★跟着端点走,别再单独取按量 key
+    from config import ark_plan_key
+    if ark_plan_key():          # 08-23 起套餐优先(订阅内 turbo),没配才走按量 pro
+        from seed_reverse import _ark_plan_text
+        return _ark_plan_text([{"type": "input_text", "text": prompt}], timeout)
+    print("[localize_seed] ⚠ 未配 Agent Plan key,走【按量付费】pro 通道", file=sys.stderr)
+    key = ark_key()
     body = {"model": ARK_MODEL, "input": [{"role": "user", "content": [
         {"type": "input_text", "text": prompt}]}],
         "thinking": {"type": "disabled"}, "stream": True}
@@ -73,6 +83,8 @@ def rewrite(shotlist_path, facts_path, out_path, qc_dir):
                  "别机械替换动词,要理解每个beat在说服什么再换成目标产品的自然表达。"
                  if "跨" in mode else
                  "这是【同类目】改写:结构一字不动,只换品牌/卖点/数字,字数贴原句。")
+    no_promo = not (f.get("activity") or "").strip()
+    no_evidence = not (f.get("evidence") or "").strip()
     prompt = f"""你是千川带货爆款编导。严格按下面【千川方法论弹药包】改写口播文案,不是凭感觉写。
 
 {ammo}
@@ -91,6 +103,10 @@ def rewrite(shotlist_path, facts_path, out_path, qc_dir):
 - 开头黄金3秒必须是弹药包03的三类句式之一(锚定对比/伪机制/指令式)
 - 红线:{f.get('redlines','')}(并守弹药包04合规红线)
 - 保留原片说服结构和节奏,字数节奏尽量贴原文(便于套镜头时长)
+- 事实分层(四层账本):只用用户明确提供的事实;没有锚点的报告/证书/机构/数据/功效/
+  用量/见效周期一律不写,不确定的用"可以关注""适合想要…的人"这类保守表达
+{chr(10) + '- ★优惠闸:activity 为空,全文禁止出现价格/折扣/赠品/限时/限量/清仓/秒杀/便宜等任何优惠词,CTA 只留行动不带交易刺激' if no_promo else ''}
+{chr(10) + '- ★权威闸:evidence 为空,不得出现白大褂/专家/证书/检测报告类身份或证据暗示;权威感只用可见商品事实和清楚的选择标准来表达' if no_evidence else ''}
 只输出改写后的口播文案,一段,不要解释、不要标注用了哪个句式。"""
     print(f"[localize_seed] 弹药包 {len(ammo)}字 + 源台词 {len(src)}字 → Seed2.1Pro改写 ...", flush=True)
     t0 = time.time()
