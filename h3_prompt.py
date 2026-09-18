@@ -25,6 +25,116 @@ detailed_description / overall_soundscape / non_diegetic_music),正文英文、
 """
 import argparse, json, os, re, sys
 
+# ─── Phase 4 提示词资产化:固定契约块从 prompt_kits/h3_core.yaml 取 ──────────
+# ★--legacy-prompt / DAIHUO_LEGACY_PROMPT=1 走旧的内嵌字面量路径,出问题随时切回。
+#   LEGACY_BLOCKS 与 h3_core.yaml 逐字节一致,冻结;新改动只改 kit。
+# ★本期只抽固定块:镜头描述生成机构(speech_timeline/OFF 换景别/RIG 机位/口型逐镜指令/
+#   summary 节拍/Cast 人数约束)仍是代码里的字面量,下期再资产化。
+_LEGACY_PROMPT = os.environ.get("DAIHUO_LEGACY_PROMPT") == "1"
+
+LEGACY_BLOCKS = {
+    "audio_definition":
+        "<Audio 1> is the supplied audio track. It is reused directly and completely "
+        "as the only audio layer.",
+    "subject_def_form":
+        "<Subject {sid}> is defined by <Picture {n}>: {fdesc}. "
+        "Reproduce exactly what is visible in <Picture {n}> and nothing else; "
+        "do not add any packaging, box, container or accessory that is not "
+        "visible in <Picture {n}>.",
+    "subject_def_product_fallback":
+        "<Subject {sid}> is the product form shown in <Picture {n}>{label_paren}. "
+        "Reproduce exactly what is visible in <Picture {n}>: its shape, colour, "
+        "texture and every printed character. Do not restyle or invent any text on it, "
+        "and do not add any packaging, box, container or accessory that is not "
+        "visible in <Picture {n}>.",
+    "subject_def_env_plate":
+        "<Subject {env_id}> is the environment, defined by <Picture {n}>: "
+        "{sd}. Use it as the reference for the layout, "
+        "props, lighting and colour grade of the location; keep the same place "
+        "throughout. Do not copy any person from it.",
+    "subject_def_env_text":
+        "<Subject {env_id}> is the environment: {env}.",
+    "subject_def_host_sheet":
+        "<Subject 1> is the host, defined by <Picture 1>: a character reference sheet "
+        "of the SAME {host_desc}. The sheet shows her from several "
+        "angles on a grey studio backdrop. Use it PURELY as the identity reference for "
+        "her face, hair and clothing; never reproduce the grey backdrop, the studio "
+        "lighting or the multi-view layout itself. Her face, hairstyle and clothing must "
+        "stay identical to <Picture 1> in every shot; never change her appearance "
+        "between shots.",
+    "subject_def_host_plain":
+        "<Subject 1> is the host, defined by <Picture 1>: {host_desc}. "
+        "Her face, hairstyle and outfit must stay identical to <Picture 1> in every shot.",
+    "subject_def_cast":
+        "<Subject {sid}> is {label}, defined by <Picture {n}>: "
+        "a character reference sheet of the SAME {d}. "
+        "The sheet shows {obj} from several angles on a grey studio backdrop. "
+        "Use it PURELY as the identity reference for {pos} face, hair and clothing; "
+        "never reproduce the grey backdrop, the studio lighting or the multi-view "
+        "layout itself. {pos_cap} face, hairstyle and clothing must stay "
+        "identical to <Picture {n}> in every shot; never change {pos} appearance "
+        "between shots.",
+    "retention_subject":
+        "<Subject {v}> (appears in {appears}): "
+        "fully_preserved - retained unchanged from <Picture {v}>.",
+    "retention_audio":
+        "<Audio 1> (spans the whole video): fully_preserved - reused directly as the "
+        "complete audio layer.",
+    "shot_stays_inside":
+        " The shot stays inside <Subject {env_id}>; keep its background and lighting "
+        "unchanged, and do not import the backdrop or colour cast of any reference "
+        "picture.",
+    "framing_rig_suffix":
+        " Vertical 9:16, available ambient light, realistic documentary texture.",
+    "overall_soundscape":
+        "<Audio 1> is reused directly as the complete and only audio layer "
+        "across the whole video. Do not generate any additional narration, voice or speech "
+        "beyond <Audio 1>.",
+    "non_diegetic_music":
+        "None. Do not add any background music.",
+    "product_precedence":
+        "the products' shape, colour, surface texture, embossing, "
+        "labels and printed text are governed SOLELY by their reference pictures. Wherever a shot "
+        "description above mentions a label, emboss, relief, pattern or wording on a product, "
+        "ignore that detail and render the product exactly as its reference picture shows.",
+    "additional_constraints":
+        "no subtitles, no captions, no on-screen text overlays, "
+        "no logo, no watermark anywhere in the frame.",
+}
+LEGACY_AXES = {
+    "camera_framing": {
+        "host": "Handheld front-facing phone selfie framing, vertical 9:16, natural light, "
+                "realistic everyday texture.",
+        "cast": "Handheld observational camera, vertical 9:16, available ambient light, "
+                "realistic documentary texture.",
+        "product": "Vertical 9:16, natural light, realistic product-photography texture.",
+    },
+}
+_H3_KIT = None
+
+
+def _B(block_id, **slots):
+    """取固定契约块:legacy 模式用内嵌 LEGACY_BLOCKS,否则从 prompt_kits/h3_core 渲染。"""
+    if _LEGACY_PROMPT:
+        return LEGACY_BLOCKS[block_id].format(**slots)
+    global _H3_KIT
+    import prompt_kit
+    if _H3_KIT is None:
+        _H3_KIT = prompt_kit.load_kit("h3_core")
+    return prompt_kit.render_block(_H3_KIT, block_id, **slots)
+
+
+def _AX(axis_name, choice):
+    """取轴选项:legacy 模式用内嵌 LEGACY_AXES,否则从 prompt_kits/h3_core 取。"""
+    if _LEGACY_PROMPT:
+        return LEGACY_AXES[axis_name][choice]
+    global _H3_KIT
+    import prompt_kit
+    if _H3_KIT is None:
+        _H3_KIT = prompt_kit.load_kit("h3_core")
+    return prompt_kit.axis(_H3_KIT, axis_name, choice)
+
+
 # 屏上贴字/花字/后期特效类指令:必须剔出提示词(那是剪映的活;07-24 实证会泄漏进画面)
 # ★不止文字类:"画面叠加虚线圆圈""箭头指向""高亮"这些也是后期加的,让模型画会画进实拍层
 POST_WORDS = ("花字", "贴字", "字幕", "标注", "字样弹", "文字条", "角标",
@@ -487,18 +597,13 @@ def cast_in(shots, cast):
 
 
 def _cast_def(sid, n, role, E):
-    """★逐字沿用 C2 实证措辞,改动前先重跑 A/B/C/C2 对照。"""
+    """★逐字沿用 C2 实证措辞,改动前先重跑 A/B/C/C2 对照。
+    Phase 4 起措辞从 h3_core.yaml 的 subject_def_cast 块取(legacy 走 LEGACY_BLOCKS)。"""
     d = E(role["desc"]) or role["desc"]
     sub, obj, pos = _PRON.get(role["pronoun"], _PRON["n"])
     label = E(role["name"]) or role["name"]
-    return (f"<Subject {sid}> is {label}, defined by <Picture {n}>: "
-            f"a character reference sheet of the SAME {d}. "
-            f"The sheet shows {obj} from several angles on a grey studio backdrop. "
-            f"Use it PURELY as the identity reference for {pos} face, hair and clothing; "
-            f"never reproduce the grey backdrop, the studio lighting or the multi-view "
-            f"layout itself. {pos.capitalize()} face, hairstyle and clothing must stay "
-            f"identical to <Picture {n}> in every shot; never change {pos} appearance "
-            f"between shots.")
+    return _B("subject_def_cast", sid=sid, n=n, label=label, d=d, obj=obj,
+              pos=pos, pos_cap=pos.capitalize())
 
 
 # ★旁白镜里的"说话"类动词必须从动作描述里剔掉,否则提示词自相矛盾(08-18 实撞)。
@@ -768,18 +873,9 @@ def build(seg, shots, cfg, en):
         #   直接合成进画面(08-13 B 版重影),要么把影棚灰背景搬进浴室。
         #   这两句逐字沿用 C2 实证版本,别改。
         if cfg.get("host_is_sheet"):
-            defs.append(
-                f"<Subject 1> is the host, defined by <Picture 1>: a character reference sheet "
-                f"of the SAME {E(host_desc) or host_desc}. The sheet shows her from several "
-                f"angles on a grey studio backdrop. Use it PURELY as the identity reference for "
-                f"her face, hair and clothing; never reproduce the grey backdrop, the studio "
-                f"lighting or the multi-view layout itself. Her face, hairstyle and clothing must "
-                f"stay identical to <Picture 1> in every shot; never change her appearance "
-                f"between shots.")
+            defs.append(_B("subject_def_host_sheet", host_desc=E(host_desc) or host_desc))
         else:
-            defs.append(
-                f"<Subject 1> is the host, defined by <Picture 1>: {E(host_desc) or host_desc}. "
-                f"Her face, hairstyle and outfit must stay identical to <Picture 1> in every shot.")
+            defs.append(_B("subject_def_host_plain", host_desc=E(host_desc) or host_desc))
         subj_ids["host"] = 1
         n = 2
     sid = n
@@ -796,22 +892,17 @@ def build(seg, shots, cfg, en):
         #   "<Subject 2> is the 油背 of the product: 李时珍洁面皂…" 这种自相矛盾的定义。
         fdesc = (cfg.get("form_desc") or {}).get(label)
         if fdesc:
-            defs.append(f"<Subject {sid}> is defined by <Picture {n}>: {E(fdesc) or fdesc}. "
-                        f"Reproduce exactly what is visible in <Picture {n}> and nothing else; "
-                        f"do not add any packaging, box, container or accessory that is not "
-                        f"visible in <Picture {n}>.")
+            defs.append(_B("subject_def_form", sid=sid, n=n,
+                           fdesc=E(fdesc) or fdesc))
         else:
             # ★绝不把 product_desc 整句贴上来:它常常一句话同时描述多个形态
             #   ("三角皂体…米粉色三棱锥纸盒印有李时珍logo…"),而这张图里只有其中一个。
             #   贴上去=主动指使模型去画一个它没有参考的东西 → 它只能瞎编
             #   (08-09 美吉吉2 实翻车:6个段凭空多出一个方盒子,文字图案全错)。
             #   缺 form_desc 时只描述"这张图里可见的",并显式禁止添加图外之物。
-            defs.append(f"<Subject {sid}> is the product form shown in <Picture {n}>"
-                        f"{' (' + (E(label) or label) + ')' if label and label != 'product' else ''}. "
-                        f"Reproduce exactly what is visible in <Picture {n}>: its shape, colour, "
-                        f"texture and every printed character. Do not restyle or invent any text on it, "
-                        f"and do not add any packaging, box, container or accessory that is not "
-                        f"visible in <Picture {n}>.")
+            defs.append(_B("subject_def_product_fallback", sid=sid, n=n,
+                           label_paren=(' (' + (E(label) or label) + ')'
+                                        if label and label != 'product' else '')))
             need_fd.append(label)
         subj_ids[label] = sid
         pics.append(path); sid += 1; n += 1
@@ -828,17 +919,13 @@ def build(seg, shots, cfg, en):
         _no_text = "Readable text (hard)" in (cfg.get("extra_constraints") or {}).get(
             seg["seg"], "")
         _sd = _clean_scene_desc(sc["desc"], no_text=_no_text)
-        defs.append(f"<Subject {env_id}> is the environment, defined by <Picture {n}>: "
-                    f"{E(_sd) or _sd}. Use it as the reference for the layout, "
-                    f"props, lighting and colour grade of the location; keep the same place "
-                    f"throughout. Do not copy any person from it.")
+        defs.append(_B("subject_def_env_plate", env_id=env_id, n=n, sd=E(_sd) or _sd))
         n += 1
     else:
         _env = _clean_scene_desc(env, no_text="Readable text (hard)" in (
             cfg.get("extra_constraints") or {}).get(seg["seg"], ""))
-        defs.append(f"<Subject {env_id}> is the environment: {E(_env) or _env}.")
-    defs.append("<Audio 1> is the supplied audio track. It is reused directly and completely "
-                "as the only audio layer.")
+        defs.append(_B("subject_def_env_text", env_id=env_id, env=E(_env) or _env))
+    defs.append(_B("audio_definition"))
     # ★人数硬约束。单主播="有且仅有一人";多人物片则钉住【确切的这几位】——
     #   08-13 前这里恒走单主播分支,给一条多人街采片也硬写"exactly one person",
     #   提示词自相矛盾,模型只能自由发挥。
@@ -941,8 +1028,7 @@ def build(seg, shots, cfg, en):
         elif has_host and s.get("host_on_camera") is not False:
             line += f" {say}"
         # ★状态参考图会连带迁移背景光照 → 每镜显式钉环境(08-09 实翻车修法)
-        line += (f" The shot stays inside <Subject {env_id}>; keep its background and lighting "
-                 f"unchanged, and do not import the backdrop or colour cast of any reference picture.")
+        line += _B("shot_stays_inside", env_id=env_id)
         body.append(line)
         # ★出场统计:主播按 host_on_camera,产品按 product_role/product_in_frame。
         #   绝不能靠"标签字面出现在中文动作里"匹配——hero/盒装这类【键名】根本不会出现在
@@ -965,11 +1051,10 @@ def build(seg, shots, cfg, en):
     for k, v in subj_ids.items():
         if k != "host" and v not in appear:
             appear[v] = list(range(1, len(shots) + 1))
-    ret = [f"<Subject {v}> (appears in {', '.join('[Shot %d]' % x for x in sorted(set(ws)))}): "
-           f"fully_preserved - retained unchanged from <Picture {v}>."
+    ret = [_B("retention_subject", v=v,
+              appears=', '.join('[Shot %d]' % x for x in sorted(set(ws))))
            for v, ws in sorted(appear.items())]
-    ret.append("<Audio 1> (spans the whole video): fully_preserved - reused directly as the "
-               "complete audio layer.")
+    ret.append(_B("retention_audio"))
 
     # ★必须和 detailed_description 用同一份剥过的动作(_clean_action),否则 summary 会
     #   把逐镜已删掉的"说话/计时器"又说一遍 —— 本项目头号病"提示词自相矛盾"的第六次。
@@ -1017,30 +1102,21 @@ def build(seg, shots, cfg, en):
         "detailed_description:",
         # ★机位语言:有立项档案就按 rig 发(08-21 起),没有才退回旧的三分法。
         #   旧的三分法猜不出"胸挂第一视角"这种 —— 榴莲千层就是这么被拍成旁观视角的。
-        (_RIG + " Vertical 9:16, available ambient light, realistic documentary texture.")
+        (_RIG + _B("framing_rig_suffix"))
         if _RIG else
-        ("Handheld front-facing phone selfie framing, vertical 9:16, natural light, "
-         "realistic everyday texture." if has_host else
-         "Handheld observational camera, vertical 9:16, available ambient light, "
-         "realistic documentary texture." if has_cast else
-         "Vertical 9:16, natural light, realistic product-photography texture."), "",
+        _AX("camera_framing",
+            "host" if has_host else "cast" if has_cast else "product"), "",
         *[b + "\n" for b in body],
         *([ft, ""] if ft else []),
         *([st, ""] if st else []),
-        "overall_soundscape: <Audio 1> is reused directly as the complete and only audio layer "
-        "across the whole video. Do not generate any additional narration, voice or speech "
-        "beyond <Audio 1>.", "",
-        "non_diegetic_music: None. Do not add any background music.", "",
+        "overall_soundscape: " + _B("overall_soundscape"), "",
+        "non_diegetic_music: " + _B("non_diegetic_music"), "",
         # ★A模式换品牌的通用陷阱:分镜表描述的是【原品牌】产品的外观(标签/浮雕/压印/花纹),
         #   而锚图是【新品牌】的 → 两者在提示词里打架,模型照着文字改产品长相
         #   (08-09 美吉吉2:"展示皂体光泽面和标签"→皂上印出乱码字;"漩涡浮雕"→三角皂变方皂)。
         #   猜词表猜不完,改用优先级声明:外观的最终裁决权归锚图。
-        "Product appearance precedence: the products' shape, colour, surface texture, embossing, "
-        "labels and printed text are governed SOLELY by their reference pictures. Wherever a shot "
-        "description above mentions a label, emboss, relief, pattern or wording on a product, "
-        "ignore that detail and render the product exactly as its reference picture shows.", "",
-        "Additional constraints: no subtitles, no captions, no on-screen text overlays, "
-        "no logo, no watermark anywhere in the frame.",
+        "Product appearance precedence: " + _B("product_precedence"), "",
+        "Additional constraints: " + _B("additional_constraints"),
         # ★逐段追加约束:director 报出缺失后【手改提示词活不过下一次重生成】——
         #   08-11 改完 S1/S4/S10 三处,一次 h3_prompt 重跑就全冲掉了。
         #   所以补丁必须写进 assets.json 的 extra_constraints,由这里注入。
@@ -1107,7 +1183,13 @@ def main():
     ap.add_argument("--off-framing", choices=["auto", "on", "off"], default="auto",
                     help="画外音窗口换景别(低头看手,人脸只留到肩)。"
                          "auto=听 assets.json 的 off_window_framing;on/off=本次强制")
+    ap.add_argument("--legacy-prompt", action="store_true",
+                    help="★走旧的内嵌字面量提示词路径(env DAIHUO_LEGACY_PROMPT=1 同效)。"
+                         "Phase 4 起固定契约块默认从 prompt_kits/h3_core.yaml 取,出问题随时切回")
     a = ap.parse_args()
+    if a.legacy_prompt:
+        global _LEGACY_PROMPT
+        _LEGACY_PROMPT = True
 
     segs = json.load(open(a.plan))
     segs_raw = json.loads(json.dumps(segs))   # 深拷贝,用于 .bak_h3 备份
@@ -1228,9 +1310,17 @@ def main():
         print("    → 删掉或改写成新产品的样子;这一遍在生成【之前】做完,别等看帧才发现。\n")
 
     manifest, warns = {}, []
+    import prompt_kit
     for seg in segs:
         shots = [sl.get(str(x)) or sl[str(x).rstrip("ab")] for x in seg["shots"]]
-        txt, pics = build(seg, shots, cfg, en)
+        with prompt_kit.trace() as _trace:
+            txt, pics = build(seg, shots, cfg, en)
+        # sidecar:本段用了哪些契约块/轴选项/槽位 hash(legacy 路径不写),给 director 闸用。
+        # ★即梦腿跳过:与下方灌回循环同一判断、同一哲学 —— h3 的产物本来就不该碰即梦腿,
+        #   sidecar 靠"各管各腿"与 plan_segments 的 prompts/<seg>.kit.json 自然不相撞。
+        if not _LEGACY_PROMPT and (seg.get("leg") or "").lower() != "jimeng":
+            prompt_kit.write_sidecar(
+                os.path.join(a.out_dir, f"{seg['seg']}.kit.json"), "h3_core", _trace)
         open(os.path.join(a.out_dir, f"{seg['seg']}_h3.txt"), "w").write(txt)
         manifest[seg["seg"]] = pics
         # ★扫【产物】不扫原始分镜表:着装/贴字/IP 已在上面剥离,扫原文会满屏假警报,

@@ -20,7 +20,11 @@ plan_segments.py — 生成方案规划(转换/迁移阶段)
 """
 import argparse, json, math, os, re
 
-TAIL = "电影质感,真实生活感。保持无字幕,不要生成BGM或背景音乐,不要生成Logo,不要生成水印。"
+# ★legacy 内嵌字面量(Phase 4 提示词资产化之前的旧路径)。--legacy-prompt 或
+#   DAIHUO_LEGACY_PROMPT=1 时走旧的内嵌写法,出问题随时切回。
+#   内容与 prompt_kits/jimeng_kou.yaml、jimeng_i2v.yaml 逐字节一致;新改动只改 kit,这里冻结。
+LEGACY_TAIL = "电影质感,真实生活感。保持无字幕,不要生成BGM或背景音乐,不要生成Logo,不要生成水印。"
+TAIL = LEGACY_TAIL          # 旧名保留(外部可能有 import),legacy 路径专用
 MAX_DUR = 12      # 单段目标时长上限(multimodal 硬上限15,留余量)
 MAX_CUTS = 3      # 单段最多归并 3 个镜头(=2 个内部硬切;即梦内部硬切实测 5 崩,留足余量)
 
@@ -282,8 +286,44 @@ def pick_product_anchors(shots, products, form_map=None):
     return anchors[:4], missing   # multimodal 总图 ≤9(含主播),产品图控 4 张内
 
 
-def build_kou_prompt(shots, host, prod_desc, anchors, host_desc=""):
-    """anchors=[(label,path)..]。@图片1=主播,@图片2..N=各产品形态,提示词逐一声明。"""
+def build_kou_prompt(shots, host, prod_desc, anchors, host_desc="", legacy=False):
+    """anchors=[(label,path)..]。@图片1=主播,@图片2..N=各产品形态,提示词逐一声明。
+    legacy=True 走旧的内嵌字面量路径(--legacy-prompt);默认从 prompt_kits/jimeng_kou 取契约。"""
+    if legacy:
+        return _legacy_build_kou_prompt(shots, host, prod_desc, anchors, host_desc)
+    import prompt_kit
+    kit = prompt_kit.load_kit("jimeng_kou")
+    scene = shots[0].get("scene", "")
+    acts = []
+    for i, s in enumerate(shots):
+        # 首镜无连接词,其后每镜前缀"硬切至"(cut_to 契约块)
+        cut = "" if i == 0 else prompt_kit.render_block(kit, "cut_to")
+        acts.append(prompt_kit.render_block(
+            kit, "shot_clause", cut=cut, shot_size=s.get("shot_size", ""),
+            camera=s.get("camera", ""), action=s.get("action", "")))
+    body = "。".join(acts)
+    dialogue = "".join((s.get("dialogue") or "") for s in shots)
+    # 逐图声明: @图片2是<产品desc>的<形态>
+    prod_lines = "".join(
+        prompt_kit.render_block(kit, "product_fidelity", idx=i + 2,
+                                prod_desc=prod_desc, label=label)
+        for i, (label, _) in enumerate(anchors))
+    images = [host] + [p for _, p in anchors]
+    # 主播身份声明两形态(host_identity 轴):有外形描述钉死跨段一致,没有退回泛声明
+    host_line = (prompt_kit.axis(kit, "host_identity", "with_desc", host_desc=host_desc)
+                 if host_desc else
+                 prompt_kit.axis(kit, "host_identity", "plain"))
+    p = (host_line + prod_lines
+         + prompt_kit.render_block(kit, "ratio")
+         + prompt_kit.render_block(kit, "scene", scene=scene)
+         + body
+         + prompt_kit.render_block(kit, "script_contract", dialogue=dialogue)
+         + prompt_kit.render_block(kit, "tail"))
+    return p, dialogue, images
+
+
+def _legacy_build_kou_prompt(shots, host, prod_desc, anchors, host_desc=""):
+    """★legacy 旧路径(--legacy-prompt):内嵌字面量,与 jimeng_kou.yaml 逐字节一致,冻结。"""
     scene = shots[0].get("scene", "")
     acts = []
     for i, s in enumerate(shots):
@@ -301,7 +341,7 @@ def build_kou_prompt(shots, host, prod_desc, anchors, host_desc=""):
                  "@图片1是带货主播本人,全程保持@图片1长相穿着一致。")
     p = (f"{host_line}{prod_lines}"
          f"竖屏9:16。场景:{scene}。{body}。"
-         f"台词{{{dialogue}}}@音频1,主播嘴巴跟随音频节奏自然说话,口型同步。{TAIL}")
+         f"台词{{{dialogue}}}@音频1,主播嘴巴跟随音频节奏自然说话,口型同步。{LEGACY_TAIL}")
     return p, dialogue, images
 
 
@@ -335,7 +375,9 @@ def product_actions_only(shots):
 #   (08-12 张九九 S9:锚图只有泡沫态,提示词却写着纸盒 → 三棱锥被画成长方形纸盒;
 #    h3 腿早先用 form_desc 治好了,即梦腿一直漏着)。
 #   有 form_desc 就只用【本段锚图那一个形态】的描述,并显式禁止编造其他形态。
-NO_OTHER_FORM = "画面中只出现参考图里的这一种产品形态,不要出现任何其他包装、盒子、袋子或容器。"
+# ★legacy 常量:与 prompt_kits/jimeng_i2v.yaml 的 no_other_form 块逐字节一致,冻结。
+LEGACY_NO_OTHER_FORM = "画面中只出现参考图里的这一种产品形态,不要出现任何其他包装、盒子、袋子或容器。"
+NO_OTHER_FORM = LEGACY_NO_OTHER_FORM   # 旧名保留(外部可能有 import),legacy 路径专用
 
 
 def _form_desc_for(cfg, label, prod_desc):
@@ -343,21 +385,37 @@ def _form_desc_for(cfg, label, prod_desc):
     return fd or prod_desc
 
 
-def build_hero_prompt(shots, prod_desc, cfg=None, label=None):
+def build_hero_prompt(shots, prod_desc, cfg=None, label=None, legacy=False):
     # ★把分镜表的 action 原样带进来(治漏动作),但剔掉主播说话从句
-    acts = "；".join(product_actions_only(shots)) or "展示产品"
+    acts = "；".join(product_actions_only(shots))
     colors = shots[0].get("key_colors", "")
     desc = _form_desc_for(cfg, label, prod_desc)
-    return (f"{acts}。微距特写,镜头轻微跟随动作,展示{desc}的真实质感、"
-            f"自然光泽({colors})。{NO_OTHER_FORM}真实质感,自然光。"
-            f"画面纯净,不要额外叠加文字或水印(产品自带的印刷内容必须原样保留)。")
+    if legacy:
+        acts = acts or "展示产品"
+        return (f"{acts}。微距特写,镜头轻微跟随动作,展示{desc}的真实质感、"
+                f"自然光泽({colors})。{LEGACY_NO_OTHER_FORM}真实质感,自然光。"
+                f"画面纯净,不要额外叠加文字或水印(产品自带的印刷内容必须原样保留)。")
+    import prompt_kit
+    kit = prompt_kit.load_kit("jimeng_i2v")
+    acts = acts or prompt_kit.render_block(kit, "fallback_acts")
+    return prompt_kit.render_block(
+        kit, "hero_prompt", acts=acts, desc=desc, colors=colors,
+        no_other_form=prompt_kit.render_block(kit, "no_other_form"),
+        pure_frame=prompt_kit.render_block(kit, "pure_frame"))
 
 
-def build_package_prompt(shots, prod_desc, anchor_label, cfg=None):
+def build_package_prompt(shots, prod_desc, anchor_label, cfg=None, legacy=False):
     desc = _form_desc_for(cfg, anchor_label, prod_desc)
-    return (f"镜头缓慢轻微推近并平移,展示{desc},质感高级,"
-            f"放在桌面上,室内柔和灯光。{NO_OTHER_FORM}"
-            f"画面纯净,不要额外叠加文字或水印(产品自带的印刷内容必须原样保留)。")
+    if legacy:
+        return (f"镜头缓慢轻微推近并平移,展示{desc},质感高级,"
+                f"放在桌面上,室内柔和灯光。{LEGACY_NO_OTHER_FORM}"
+                f"画面纯净,不要额外叠加文字或水印(产品自带的印刷内容必须原样保留)。")
+    import prompt_kit
+    kit = prompt_kit.load_kit("jimeng_i2v")
+    return prompt_kit.render_block(
+        kit, "package_prompt", desc=desc,
+        no_other_form=prompt_kit.render_block(kit, "no_other_form"),
+        pure_frame=prompt_kit.render_block(kit, "pure_frame"))
 
 
 def completeness_check(prompt, shots, verbs=None):
@@ -375,7 +433,7 @@ def completeness_check(prompt, shots, verbs=None):
 
 
 def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
-         hard_max_cuts=None, by_leg=False, hero_strict=False):
+         hard_max_cuts=None, by_leg=False, hero_strict=False, legacy_prompt=False):
     sl = json.load(open(shotlist_path))
     cfg = json.load(open(assets_path))
     host = cfg.get("host_anchor", "")
@@ -387,6 +445,9 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
     shots = split_long_shots(sl["shots"])       # 修1: 先拆超长单镜
     groups = group_shots(shots, max_cuts, min_dur, hard_max_cuts, by_leg, hero_strict)
 
+    # Phase 4:提示词从 prompt_kits 取(legacy_prompt=True 走旧的内嵌字面量路径)。
+    # 每段渲染留痕写 prompts/<seg>.kit.json sidecar,给以后的 director 闸用。
+    prompt_traces = {}
     segments, md = [], [f"# 生成方案 ({len(groups)}段)\n", f"产品: {prod_desc}\n"]
     for gi, shots in enumerate(groups, 1):
         role = seg_role(shots)
@@ -394,32 +455,36 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
         dur = max(min_dur or 4, min(15, math.ceil(end - start)))
         sid = f"S{gi}"
         warns = []
-        if role == "kou":
-            anchors, missing = pick_product_anchors(shots, products, form_map)
-            prompt, dialogue, images = build_kou_prompt(shots, host, prod_desc, anchors, host_desc)
-            warns = completeness_check(prompt, shots, verbs)
-            warns += [f"⚠锚图缺失:提示词提到'{w}'但assets无对应图,即梦会自由发挥编产品→请补图或删该形态" for w, _ in missing]
-            seg = {"seg": sid, "type": "mm", "images": images,
-                   "anchor_labels": [l for l, _ in anchors],
-                   "dialogue": dialogue, "prompt": prompt}
-        elif role == "hero":
-            lbl = "hero_alt" if products.get("hero_alt") else "hero"
-            anchor = products.get(lbl)
-            prompt = build_hero_prompt(shots, prod_desc, cfg, lbl)
-            warns = completeness_check(prompt, shots, verbs)
-            seg = {"seg": sid, "type": "i2v", "anchor": anchor, "prompt": prompt}
-        elif role == "package":
-            anchors, missing = pick_product_anchors(shots, products, form_map)
-            label, anchor = anchors[0] if anchors else ("产品", products.get("hero"))
-            prompt = build_package_prompt(shots, prod_desc, label, cfg)
-            warns = [f"⚠锚图缺失:'{w}'无对应图" for w, _ in missing]
-            seg = {"seg": sid, "type": "i2v", "anchor": anchor, "prompt": prompt}
-        else:
-            anchors, _ = pick_product_anchors(shots, products, form_map)
-            lbl = anchors[0][0] if anchors else "hero"
-            anchor = anchors[0][1] if anchors else products.get("hero")
-            prompt = build_hero_prompt(shots, prod_desc, cfg, lbl)
-            seg = {"seg": sid, "type": "i2v", "anchor": anchor, "prompt": prompt}
+        import prompt_kit
+        with prompt_kit.trace() as _trace:
+            if role == "kou":
+                anchors, missing = pick_product_anchors(shots, products, form_map)
+                prompt, dialogue, images = build_kou_prompt(shots, host, prod_desc, anchors,
+                                                            host_desc, legacy=legacy_prompt)
+                warns = completeness_check(prompt, shots, verbs)
+                warns += [f"⚠锚图缺失:提示词提到'{w}'但assets无对应图,即梦会自由发挥编产品→请补图或删该形态" for w, _ in missing]
+                seg = {"seg": sid, "type": "mm", "images": images,
+                       "anchor_labels": [l for l, _ in anchors],
+                       "dialogue": dialogue, "prompt": prompt}
+            elif role == "hero":
+                lbl = "hero_alt" if products.get("hero_alt") else "hero"
+                anchor = products.get(lbl)
+                prompt = build_hero_prompt(shots, prod_desc, cfg, lbl, legacy=legacy_prompt)
+                warns = completeness_check(prompt, shots, verbs)
+                seg = {"seg": sid, "type": "i2v", "anchor": anchor, "prompt": prompt}
+            elif role == "package":
+                anchors, missing = pick_product_anchors(shots, products, form_map)
+                label, anchor = anchors[0] if anchors else ("产品", products.get("hero"))
+                prompt = build_package_prompt(shots, prod_desc, label, cfg, legacy=legacy_prompt)
+                warns = [f"⚠锚图缺失:'{w}'无对应图" for w, _ in missing]
+                seg = {"seg": sid, "type": "i2v", "anchor": anchor, "prompt": prompt}
+            else:
+                anchors, _ = pick_product_anchors(shots, products, form_map)
+                lbl = anchors[0][0] if anchors else "hero"
+                anchor = anchors[0][1] if anchors else products.get("hero")
+                prompt = build_hero_prompt(shots, prod_desc, cfg, lbl, legacy=legacy_prompt)
+                seg = {"seg": sid, "type": "i2v", "anchor": anchor, "prompt": prompt}
+        prompt_traces[sid] = (_trace, {"kou": "jimeng_kou"}.get(role, "jimeng_i2v"))
         # 每段都记连续旁白(hero/包装段也要,装配时铺完整配音轨)
         seg_dialogue = "".join((s.get("dialogue") or "") for s in shots)
         seg.update({"leg": seg_leg(shots, hero_strict),
@@ -438,6 +503,11 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
     json.dump(segments, open(out_path, "w"), ensure_ascii=False, indent=2)
     mdp = out_path.replace(".json", ".md")
     open(mdp, "w").write("\n".join(md))
+    # sidecar:每段用了哪个 kit、哪些块、哪些轴选项、槽位值 hash(legacy 路径不写)
+    if not legacy_prompt:
+        pdir = os.path.join(os.path.dirname(os.path.abspath(out_path)), "prompts")
+        for sid_, (t, kit_name) in prompt_traces.items():
+            prompt_kit.write_sidecar(os.path.join(pdir, f"{sid_}.kit.json"), kit_name, t)
     print(f"[plan] {len(segments)}段 → {out_path}")
     nwarn = sum(len(s["warns"]) for s in segments)
     for s in segments:
@@ -479,6 +549,11 @@ if __name__ == "__main__":
     ap.add_argument("--hard-max-cuts", type=int, default=None,
                     help="填满模式下的镜数天花板,绝不越过(默认=--max-cuts)。即梦内部硬切5崩,"
                          "h3已验3刀;快切片开填满时必须设,否则会把9个镜头塞进一段")
+    ap.add_argument("--legacy-prompt", action="store_true",
+                    help="★走旧的内嵌字面量提示词路径(env DAIHUO_LEGACY_PROMPT=1 同效)。"
+                         "Phase 4 起默认从 prompt_kits/ 装配,出问题用本开关随时切回")
     a = ap.parse_args()
+    legacy = a.legacy_prompt or os.environ.get("DAIHUO_LEGACY_PROMPT") == "1"
     out = a.out or os.path.join(os.path.dirname(a.shotlist), "segments.json")
-    plan(a.shotlist, a.assets, out, a.max_cuts, a.min_dur, a.hard_max_cuts, a.by_leg, a.hero_strict)
+    plan(a.shotlist, a.assets, out, a.max_cuts, a.min_dur, a.hard_max_cuts, a.by_leg,
+         a.hero_strict, legacy_prompt=legacy)

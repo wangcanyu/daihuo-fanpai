@@ -1,0 +1,114 @@
+# prompt_kits/h3_core.yaml — 海螺 h3 Ref2VA 六段式的【固定契约块】
+#   (h3_prompt.py;只抽固定块。镜头描述生成机构 —— speech_timeline/OFF 换景别/RIG 机位/
+#    口型逐镜指令/summary 节拍 —— 这期不动,留在代码里)
+#
+# ★每个契约块上方的"出处"置语不是普通文案,是几十次翻车换来的:
+#   出处丢了就等于没资产化。改措辞前必须先读出处、重跑出处里的对照。
+kit: h3_core
+desc: h3 六段式提示词的固定契约段(subject/retention/soundscape/constraints 各块)
+
+blocks:
+  # ★出处:Audio 契约句 —— h3 三条硬规①(h3_prompt docstring):台词绝不进 prompt
+  #   (内容安全审查只审文本,台词/价格词必拒),口型靠 audioUrls 自带。
+  #   "reused directly and completely" 钉死音频是唯一音层,别加别减。
+  audio_definition:
+    text: "<Audio 1> is the supplied audio track. It is reused directly and completely as the only audio layer."
+
+  # ★出处:有 form_desc 时的产品 Subject 定义。form_desc 逐形态描述是 08-09 美吉吉2
+  #   三次打地鼠(编方盒子→皂上印乱码字→三角皂变方皂)后的治法:只描述这张图里是什么,
+  #   并显式禁止添加图外之物("nothing else / do not add any packaging...")。
+  subject_def_form:
+    text: "<Subject {sid}> is defined by <Picture {n}>: {fdesc}. Reproduce exactly what is visible in <Picture {n}> and nothing else; do not add any packaging, box, container or accessory that is not visible in <Picture {n}>."
+
+  # ★出处:缺 form_desc 时的保守兜底定义。★绝不把 product_desc 整句贴上:它常一句话
+  #   同时描述多个形态,而这张图里只有其中一个,贴上去 = 指使模型画没有参考的东西
+  #   (08-09 美吉吉2 实翻车;08-11 爆爆朵一 S3 编出绿叶软包装袋,23/58 段同病)。
+  #   "every printed character / Do not restyle or invent any text" 保包装印刷字。
+  subject_def_product_fallback:
+    text: "<Subject {sid}> is the product form shown in <Picture {n}>{label_paren}. Reproduce exactly what is visible in <Picture {n}>: its shape, colour, texture and every printed character. Do not restyle or invent any text on it, and do not add any packaging, box, container or accessory that is not visible in <Picture {n}>."
+
+  # ★出处:环境 Subject(有场景板)。08-18 拿 S12/S17/S7 三段实测加场景板:背景变成
+  #   板里那个具体的地方,人物一致性没有退化。绑板时不再贴逐镜 scene 原文
+  #   (每镜都不一样的文字和"保持与参考图一致"直接打架 —— 两句话打架是本项目头号病)。
+  #   "Do not copy any person from it" —— 场景板按设计无人,人属于 cast 层。
+  subject_def_env_plate:
+    text: "<Subject {env_id}> is the environment, defined by <Picture {n}>: {sd}. Use it as the reference for the layout, props, lighting and colour grade of the location; keep the same place throughout. Do not copy any person from it."
+
+  # ★出处:环境 Subject(无场景板,退回纯文字旧行为)。scene 文本已过
+  #   _clean_scene_desc(剥掉点名要人/要招牌的分句,08-22 榴莲千层撞脸根治)。
+  subject_def_env_text:
+    text: "<Subject {env_id}> is the environment: {env}."
+
+  # ★出处:单主播+人设图(3:4 拼版)锚定措辞 —— 逐字沿用 08-13 小禾家 S7 四版对照
+  #   (A/B/C/C2)的 C2 实证版,改动前先重跑对照。"PURELY as the identity reference" 和
+  #   "never reproduce the grey backdrop, the studio lighting or the multi-view layout itself"
+  #   两句必须逐字保留:少了就退化成 B 版重影(拼版被当图层合成进画面),或把影棚灰背景
+  #   搬进实景。⚠换图必须同时换措辞(普通照片锚和人设图锚是两套话)。
+  subject_def_host_sheet:
+    text: "<Subject 1> is the host, defined by <Picture 1>: a character reference sheet of the SAME {host_desc}. The sheet shows her from several angles on a grey studio backdrop. Use it PURELY as the identity reference for her face, hair and clothing; never reproduce the grey backdrop, the studio lighting or the multi-view layout itself. Her face, hairstyle and clothing must stay identical to <Picture 1> in every shot; never change her appearance between shots."
+
+  # ★出处:单主播+普通参考照片锚定措辞(旧写法,与人设图措辞互斥,见上条)。
+  subject_def_host_plain:
+    text: "<Subject 1> is the host, defined by <Picture 1>: {host_desc}. Her face, hairstyle and outfit must stay identical to <Picture 1> in every shot."
+
+  # ★出处:演职表角色定义 —— 逐字沿用 C2 实证措辞(_cast_def:改动前先重跑 A/B/C/C2
+  #   对照)。08-13 小禾家血案的根治点:多人物片的人物必须绑人设图供身份,
+  #   否则 17 段各编各的脸,切镜变脸是必然。"PURELY as the identity reference" /
+  #   "never reproduce the grey backdrop..." 与 host_sheet 同源,逐字保留。
+  subject_def_cast:
+    text: "<Subject {sid}> is {label}, defined by <Picture {n}>: a character reference sheet of the SAME {d}. The sheet shows {obj} from several angles on a grey studio backdrop. Use it PURELY as the identity reference for {pos} face, hair and clothing; never reproduce the grey backdrop, the studio lighting or the multi-view layout itself. {pos_cap} face, hairstyle and clothing must stay identical to <Picture {n}> in every shot; never change {pos} appearance between shots."
+
+  # ★出处:retention_analysis 逐 Subject 行。出场镜次表是 08-22 为"哪几镜之间必须保持
+  #   同一张脸"加的:报的出场镜次要真实(逐镜按 person/subject 判在场,不按整段一刀切),
+  #   模型才知道跨哪几镜锁身份。绝不能靠标签字面在中文动作里匹配(首版实翻车,
+  #   hero/盒装这类键名根本不出现在文案里,会整条漏掉产品)。
+  retention_subject:
+    text: "<Subject {v}> (appears in {appears}): fully_preserved - retained unchanged from <Picture {v}>."
+
+  # ★出处:retention_analysis 的 Audio 行,与 audio_definition 同源(音频唯一层)。
+  retention_audio:
+    text: "<Audio 1> (spans the whole video): fully_preserved - reused directly as the complete audio layer."
+
+  # ★出处:逐镜"钉死环境"句 —— h3 三条硬规③:状态参考图(泡沫态/使用态)必须在该镜
+  #   写死环境,否则会连背景光照一起迁移(08-09 实翻车修法)。⚠压缩机构 _compact_prompt
+  #   的 L2 级正则是按这句原文匹配的,改这句必须同步改那条正则。
+  shot_stays_inside:
+    text: " The shot stays inside <Subject {env_id}>; keep its background and lighting unchanged, and do not import the backdrop or colour cast of any reference picture."
+
+  # ★出处:有机位档案(rig)时的画幅/质感尾注,接在 RIG 机位句后面。
+  #   "realistic documentary texture" 是压缩机构 L1 级首批可删的风格修饰词(见
+  #   _compact_prompt 优先级表),改词要同步那张表。
+  framing_rig_suffix:
+    text: " Vertical 9:16, available ambient light, realistic documentary texture."
+
+  # ★出处:overall_soundscape —— 音频唯一层在六段式尾部的再次钉死(与 audio_definition /
+  #   retention_audio 三处同口径,任何一处改了另外两处必须跟)。"Do not generate any
+  #   additional narration" 防模型自己加旁白盖掉原音。
+  overall_soundscape:
+    text: "<Audio 1> is reused directly as the complete and only audio layer across the whole video. Do not generate any additional narration, voice or speech beyond <Audio 1>."
+
+  # ★出处:非配乐声明。BGM 是后期的活(交付红线:FULL.mp4 永远保持无字幕无 BGM 的
+  #   中性状态),模型生成层一律 None。
+  non_diegetic_music:
+    text: "None. Do not add any background music."
+
+  # ★出处:外观优先级声明 —— A模式换品牌的通用陷阱(08-09 美吉吉2 打了三次地鼠):
+  #   分镜表描述的是【原品牌】产品的外观(标签/浮雕/压印/花纹),锚图是【新品牌】的,
+  #   两者打架模型照文字改产品长相。猜词表猜不完,改用优先级声明:外观最终裁决权归锚图。
+  #   "governed SOLELY by their reference pictures" 是核心措辞,别软化。
+  product_precedence:
+    text: "the products' shape, colour, surface texture, embossing, labels and printed text are governed SOLELY by their reference pictures. Wherever a shot description above mentions a label, emboss, relief, pattern or wording on a product, ignore that detail and render the product exactly as its reference picture shows."
+
+  # ★出处:收尾硬约束。无字幕/无贴字/无 logo/无水印 —— 字幕是模型已知缺陷(约束词只
+  #   降概率,抽帧验收仍是必经);贴字是后期的活(07-24 实证会泄漏进画面)。
+  additional_constraints:
+    text: "no subtitles, no captions, no on-screen text overlays, no logo, no watermark anywhere in the frame."
+
+axes:
+  # ★出处:无 rig 档案时的画幅/机位三分法(旧行为,rig 前的退路)。三分法猜不出
+  #   "胸挂第一视角"(08-21 榴莲千层就是这么被拍成旁观视角的,后来才有 profile/rig),
+  #   但作为无档案片的兜底已验证。三条的 "realistic ... texture" 均在压缩 L1 表内。
+  camera_framing:
+    host: "Handheld front-facing phone selfie framing, vertical 9:16, natural light, realistic everyday texture."
+    cast: "Handheld observational camera, vertical 9:16, available ambient light, realistic documentary texture."
+    product: "Vertical 9:16, natural light, realistic product-photography texture."
