@@ -13,6 +13,8 @@ export_subs.py — 导出字幕 SRT + 屏上贴字清单(后期剪映直接照�
 """
 import argparse, json, os, re
 
+import dualtext  # 显示|发音 双文本:字幕一律取 display(09-18)
+
 
 def fmt_ts(sec):
     ms = int(round(sec * 1000))
@@ -31,12 +33,24 @@ def sentences(text):
     return [SPK.sub("", x).strip() for x in parts if SPK.sub("", x).strip()]
 
 
+def display_text(raw):
+    """台词 → 屏上文本:dualtext 取 display + 剥 @{锚点}(09-18)。
+    ★锚点可以与 dualtext 共存于台词里(word_align 用),字幕两种标记都不上屏;
+    无标记恒等透传。锚点未配对会抛 ValueError(不静默,标记错位宁可炸在这里)。"""
+    disp = dualtext.parse(raw)[0]
+    if "@{" in disp:
+        from word_align import strip_anchors  # 延迟 import,避免与 deliver 的环
+        disp = strip_anchors(disp, "字幕")[0]
+    return disp
+
+
 def export(seg_path, shotlist_path, out_base):
     segs = json.load(open(seg_path))
     # ── SRT:段起止来自装配顺序(逐段视频时长≈duration,按 start 归零累加) ──
     entries, clock = [], 0.0
     for s in segs:
-        d = (s.get("dialogue") or "").strip()
+        # ★字幕只上 display(屏上 "898",发音 "八百九十八" 不上屏);无标记恒等透传
+        d = display_text((s.get("dialogue") or "").strip())
         dur = float(s.get("duration", 0)) or (s["end"] - s["start"])
         if d:
             sents = sentences(d)

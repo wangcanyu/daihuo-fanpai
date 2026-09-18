@@ -13,7 +13,7 @@ updated: 2026-07-13
 反推爆款 → 迁移到目标产品 → 即梦生成 → 配音拼接。核心洞察:**病在"反推→写提示词"的转换环节会丢细节/丢动作,不在模型**。本 skill 把验证过的管线固化,每步产物可审。
 
 引擎在本目录(可插拔,换实现只改单个文件):
-`seed_reverse.py` 反推 · `merge_reverse.py` 双反推合并 · **`route.py` 判片型(决定后续生成方式)** · `plan_segments.py` 规划 · `h3_prompt.py` 海螺提示词生成 · **`director.py` 约束维度检查(生成前最后一道闸)** · `seam_pick.py` 一镜到底续接挑缝 · `cut_audio.py` 原音切段(≥2s闸+timing.json+**--speaker 处理版音轨**) · `patch_cast.py` 群戏/多人补丁(人数硬约束) · `prep_assets.py` 产品图清洗(白底化/去手持+sidecar) · `qc_assets.py` **资产入库闸(身体部位/水印/透明底/无关道具/生图小字复检)** · `gen_segments.py` 生成 · `qc_lipsync.py` 帧级口型质检 · `qc_defects.py` 四类缺陷定量抽帧 · `grid_off.py` 多卷同网格对照 · `is_speech.py`/`voice_cmp.py` 音轨判据 · `qc_voice.py` 声纹聚类对账(可选重型) · `calibrate_turns.py` 说话轮次时间码校准(可选,需火山ASR key) · `tts_segments.py` 配音 · `assemble.py` 装配 · `deliver.py` 交付(剪映草稿/成品) · `doctor.py` 体检。
+`seed_reverse.py` 反推 · `merge_reverse.py` 双反推合并 · **`route.py` 判片型(决定后续生成方式)** · `plan_segments.py` 规划 · `h3_prompt.py` 海螺提示词生成 · **`director.py` 约束维度检查(生成前最后一道闸)** · `seam_pick.py` 一镜到底续接挑缝 · `cut_audio.py` 原音切段(≥2s闸+timing.json+**--speaker 处理版音轨**) · `patch_cast.py` 群戏/多人补丁(人数硬约束) · `prep_assets.py` 产品图清洗(白底化/去手持+sidecar) · `qc_assets.py` **资产入库闸(身体部位/水印/透明底/无关道具/生图小字复检)** · `gen_segments.py` 生成 · `qc_lipsync.py` 帧级口型质检 · `qc_defects.py` 四类缺陷定量抽帧 · `grid_off.py` 多卷同网格对照 · `grid_words.py` 词标签帧网格(反推/审查按短语查画面) · `dualtext.py` 显示|发音双文本 · `word_align.py` 词级对齐+语义锚(贴字绑锚自动重排) · `is_speech.py`/`voice_cmp.py` 音轨判据 · `qc_voice.py` 声纹聚类对账(可选重型) · `calibrate_turns.py` 说话轮次时间码校准(可选,需火山ASR key) · `tts_segments.py` 配音 · `assemble.py` 装配 · `deliver.py` 交付(剪映草稿/成品) · `doctor.py` 体检。
 验收必过 `references/验收清单.md`(八维度,前4抽帧、后4必须看视频)。
 生成后端(可插拔,契约 `submit_*()->tid` / `wait_download(tid,dst)->(size,usage)`):即梦CLI(内置) · **`mmh3_gen.py` MiniMax H3 官方规范(秘塔渠道,h3 首选)** · `ark_gen.py` 火山 · `xyq_gen.py` 小云雀 · `rh_gen.py` RunningHub海螺h3(同模型贵4.4倍,已退役)。
 
@@ -222,6 +222,11 @@ python3 <engine>/doctor.py
         → ★**每翻一次车就往 director.py 的 RULES 加一行**——把"想到要加什么约束"固化下来,越用越可靠。
           08-11 回归验证:翻车那版提示词被精确抓出 2 处缺失(左右手/节拍),修正版全绿。
 3 配音  python3 tts_segments.py run/segments.json --out-dir run/audio/seg
+        (台词支持 <显示|发音> 双文本与 @{锚点};数字/品牌读音写 <898|八百九十八>,别指望黑名单)
+3b 锚点  python3 word_align.py run/segments.json --audio-dir run/audio/seg \
+          --out run/anchors.json --report run/锚点对照表.md
+        (配音变了就重跑这一步,贴字轨绑了 onscreen_anchor 的条目自动跟着重排;
+         对照表里的 omission/replacement 是 TTS 漏读错读的证据,进人审)
         (降级:复用原音时跳过此步,改用 cut_audio.py 按段切原片音频:
          python3 cut_audio.py run/segments.json --video 原片.mp4 --shotlist run/shotlist.json --out run/audio/seg \
                  [--speaker run/speaker.json]

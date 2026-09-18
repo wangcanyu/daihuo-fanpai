@@ -64,16 +64,27 @@ def main():
         synth = lambda t: list(cv.inference_sft(t, a.speaker, stream=False))[0]["tts_speech"].numpy().reshape(-1)
 
     timing = {}
+    import dualtext  # 显示|发音 双文本(09-18);无标记恒等透传,默认路径不受影响
     for s in segs:
         d = (s.get("dialogue") or "").strip()
         if not d:
             continue
-        txt = apply_pron_fix(d, haishen)
+        disp, spoken = dualtext.parse(d)
+        # ★硬断言:发音文本绝不许残留标记符号(09-18)——残留说明上游忘了剥锚点,
+        #   静默放过会把 "@{" 这类符号直接念出来,成品报废才发现。
+        for ch in ("<", "@", "{"):
+            if ch in spoken:
+                raise ValueError(
+                    f"[tts_cosy] {s['seg']} 发音文本含标记字符 {ch!r}: {spoken!r} "
+                    f"(锚点 @{{名}} 须先剥除,dualtext 用 <显示|发音> 语法)")
+        txt = apply_pron_fix(spoken, haishen)
         t0 = time.time()
         wav = synth(txt)
         dur = len(wav) / 22050.0
         sf.write(os.path.join(a.out_dir, f"{s['seg']}.wav"), wav, 22050)
-        timing[s["seg"]] = {"text": d, "dur": round(dur, 2), "gen_sec": round(time.time() - t0, 1)}
+        # timing.json:text 存 display(字幕用),text_spoken 存实际喂 TTS 的发音文本(备查)
+        timing[s["seg"]] = {"text": disp, "text_spoken": txt,
+                            "dur": round(dur, 2), "gen_sec": round(time.time() - t0, 1)}
         print(f"  [{s['seg']}] {dur:.1f}s | {txt[:34]}", flush=True)
     json.dump(timing, open(os.path.join(a.out_dir, "timing.json"), "w",
                            encoding="utf-8"), ensure_ascii=False, indent=1)

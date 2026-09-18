@@ -26,11 +26,13 @@ draft 模式若当前解释器缺该库,自动用 DAIHUO_JY_PYTHON(默认 ~/.ven
 用法:
   python3 deliver.py segments.json --mode draft --drafts-dir "D:\\jianying\\JianyingPro Drafts" --name 我的项目
   python3 deliver.py segments.json --mode final --full output/FULL.mp4 [--bgm x.mp3]
+  python3 deliver.py segments.json --shotlist shotlist.json [--anchors anchors.json] --print-tiezi
+      # 干跑贴字轨(不建草稿):shot 带 onscreen_anchor 时按锚点窗口重排到新时间线
 """
 import argparse, subprocess, json, os, re, shutil, subprocess, sys
 
 import config
-from export_subs import sentences, fmt_ts  # 复用切句/时间码
+from export_subs import sentences, fmt_ts, display_text  # 复用切句/时间码/屏上文本(剥标记)
 
 
 # ── 路径:WSL ↔ Windows ─────────────────────────────────────────────
@@ -80,7 +82,9 @@ def build_entries(segs, seg_starts, timing):
         if lines:  # 精确路径:逐句真实时长
             off = 0.0
             for ln in lines:
-                sents = sentences(ln["text"])
+                # ★字幕只上 display:timing 的 text 已是显示文本,但旧产物可能带
+                #   <显示|发音>/@{锚点} 标记,消费处再过一遍兜底(恒等透传无代价)
+                sents = sentences(display_text(ln["text"]))
                 total = sum(len(x) for x in sents) or 1
                 s0 = t0 + off
                 for x in sents:
@@ -89,7 +93,7 @@ def build_entries(segs, seg_starts, timing):
                     s0 += d
                 off += ln["dur"]
         else:  # 粗对齐兜底
-            d = (s.get("dialogue") or "").strip()
+            d = display_text((s.get("dialogue") or "").strip())  # 取 display+剥锚点
             if not d:
                 continue
             sents = sentences(d)
@@ -125,7 +129,8 @@ def _ensure_jy():
 
 
 def deliver_draft(segs, clips_dir, audio_dir, timing, drafts_dir, name,
-                  shotlist_path=None, replace=False, trim_to_plan=False, size="720x1280"):
+                  shotlist_path=None, replace=False, trim_to_plan=False, size="720x1280",
+                  anchors=None):
     _ensure_jy()
     import pyJianYingDraft as jy
     from pyJianYingDraft import TrackSpec, TrackType
@@ -189,21 +194,17 @@ def deliver_draft(segs, clips_dir, audio_dir, timing, drafts_dir, name,
         write_srt(entries, srt)
         script.import_srt(srt, "字幕")
 
-    # 贴字参考轨:原片屏上贴字按原时间点放好,照着换成自己的品牌词
+    # 贴字参考轨:原片屏上贴字放好,照着换成自己的品牌词。
+    # 带 onscreen_anchor 且有 anchors.json 的条,按锚点窗口重排到新时间线(见 tiezi_entries)
     if shotlist_path and os.path.exists(shotlist_path):
         script.append_track(TrackSpec(TrackType.text, "贴字参考"))
         n = 0
-        total_s = t_us / 1e6
-        for sh in json.load(open(shotlist_path)).get("shots", []):
-            ot = (sh.get("onscreen_text") or "").strip()
-            a, b = float(sh.get("start", 0)), float(sh.get("end", 0))
-            if not ot or ot in ("无", "none") or a >= total_s:
-                continue
-            d_us = int((min(b, total_s) - a) * 1e6)
-            if d_us <= 0:
-                continue
+        for ot, a, b, src in tiezi_entries(shotlist_path, segs, seg_starts,
+                                           anchors, t_us / 1e6):
             script.add_segment(jy.TextSegment(
-                ot.replace("\n", " "), jy.Timerange(int(a * 1e6), d_us)), "贴字参考")
+                ot, jy.Timerange(int(a * 1e6), int((b - a) * 1e6))), "贴字参考")
+            if src.startswith("锚点"):
+                print(f"[deliver] 贴字锚点重排: 「{ot[:12]}」→ {a:.2f}–{b:.2f}s({src})")
             n += 1
         if n:
             print(f"[deliver] 贴字参考 {n} 条已上轨")
@@ -212,6 +213,93 @@ def deliver_draft(segs, clips_dir, audio_dir, timing, drafts_dir, name,
     fix_json_paths(draft_dir)
     print(f"[deliver] 剪映草稿 → {draft_dir}")
     print(f"[deliver] 打开剪映草稿箱找「{name}」即可精剪(总长 {t_us/1e6:.1f}s,字幕 {len(entries)} 条)")
+
+
+# ── 贴字参考轨(两模式共用条目计算,deliver_draft 与 --print-tiezi 干跑用) ──
+POINT_TIEZI_DUR = 1.2  # point 型锚点的默认展示时长(s)
+
+
+def load_anchors(path, plan_path):
+    """锚点文件:显式 --anchors 优先;未传自动探测 plan 同目录 anchors.json。无则 None。"""
+    p = path or os.path.join(os.path.dirname(os.path.abspath(plan_path)), "anchors.json")
+    if os.path.exists(p):
+        d = json.load(open(p, encoding="utf-8"))
+        n = sum(len(v.get("anchors", {})) for v in d.values())
+        print(f"[deliver] 锚点文件: {p}({n} 个锚点)")
+        return d
+    return None
+
+
+def plan_seg_starts(segs):
+    """无 clips 时的规划口径 seg_starts(--print-tiezi 干跑用):
+    按 segments.json 的 end-start(缺了用 duration)累加,与 trim_to_plan 装配同口径。"""
+    st, t = {}, 0.0
+    for s in segs:
+        d = float(s.get("end", 0)) - float(s.get("start", 0)) or float(s.get("duration", 0))
+        st[s["seg"]] = (t, d)
+        t += d
+    return st
+
+
+def tiezi_entries(shotlist_path, segs, seg_starts, anchors=None, total_s=None):
+    """贴字轨条目 → [(text, start_s, end_s, 来源)]。
+    默认按原片时间(shotlist start/end)。B模式贴字自动重排(09-18):shot 带
+    onscreen_anchor 且有 anchors.json 时,落位 = 该 shot 所属 segment 在新时间线的
+    起点(seg_starts,与字幕轨同一口径)+ 锚点窗口;point 型给 POINT_TIEZI_DUR 展示。
+    ★缺 anchors.json / 锚点名找不到 / shot 不落任何 segment → 静默回落原片时间,
+      各打一行 WARN 不硬报错(贴字本来就是参考轨,锚点只是加分项)。"""
+    shots = json.load(open(shotlist_path, encoding="utf-8")).get("shots", [])
+    span = {s["seg"]: (float(s.get("start", 0)), float(s.get("end", 0))) for s in segs}
+    out, warned_no_file = [], False
+    for sh in shots:
+        ot = (sh.get("onscreen_text") or "").strip().replace("\n", " ")
+        a0, b0 = float(sh.get("start", 0)), float(sh.get("end", 0))
+        if not ot or ot in ("无", "none") or (total_s and a0 >= total_s):
+            continue
+        a, b, src = a0, b0, "原片时间"
+        aname = (sh.get("onscreen_anchor") or "").strip()
+        if aname:
+            # shot 归属:起点落在段 [start,end) 原片区间内(贴字跟着台词头部走)
+            seg = next((nm for nm, (s0, s1) in span.items() if s0 <= a0 < s1), None)
+            win = None
+            if seg is None:
+                print(f"[deliver][WARN] 贴字「{ot[:12]}」锚点 @{aname}: "
+                      f"shot 起点 {a0:.1f}s 不在任何 segment 内,回落原片时间")
+            elif anchors is None:
+                if not warned_no_file:
+                    print(f"[deliver][WARN] 贴字带 onscreen_anchor 但缺 anchors.json"
+                          f"(--anchors 未传且 plan 同目录没有),全部回落原片时间")
+                    warned_no_file = True
+            elif seg not in seg_starts:
+                print(f"[deliver][WARN] 贴字「{ot[:12]}」锚点 @{aname}: 段 {seg} "
+                      f"不在新时间线(缺片被跳过?),回落原片时间")
+            else:
+                win = (anchors.get(seg, {}).get("anchors") or {}).get(aname)
+                if win is None:
+                    print(f"[deliver][WARN] 贴字「{ot[:12]}」: 段 {seg} 里找不到锚点 "
+                          f"@{aname},回落原片时间")
+            if win is not None:
+                base = seg_starts[seg][0]
+                seg_end = base + seg_starts[seg][1]
+                a = base + win["start"]
+                b = min(base + (win["end"] if win["kind"] == "span"
+                                else win["start"] + POINT_TIEZI_DUR), seg_end)
+                if a >= seg_end:
+                    # ★锚点按配音 wav 全长计,段视频可能被裁短(trim_to_plan);
+                    #   窗口整体落到段外时贴字会消失,宁可回落也不静默丢(09-18 实撞:
+                    #   S8 配音 12.6s vs 规划 6.8s,七天无理由 10.6s 起全在段外)
+                    print(f"[deliver][WARN] 贴字「{ot[:12]}」锚点 @{aname}: 窗口 "
+                          f"{win['start']}–{win['end']}s 超出段 {seg} 新时间线时长 "
+                          f"{seg_starts[seg][1]:.1f}s,回落原片时间")
+                    a, b = a0, b0
+                else:
+                    src = f"锚点@{aname}" + ("(low_conf)" if win.get("low_conf") else "")
+        if total_s:
+            b = min(b, total_s)
+        if b - a <= 0:
+            continue
+        out.append((ot, round(a, 3), round(b, 3), src))
+    return out
 
 
 # ── 产物一:接近成品(烧字幕+BGM) ─────────────────────────────────────
@@ -260,6 +348,11 @@ if __name__ == "__main__":
     ap.add_argument("--clips", default="./clips")
     ap.add_argument("--audio-dir", default="audio/seg")
     ap.add_argument("--shotlist", default=None, help="draft:生成贴字参考轨")
+    ap.add_argument("--anchors", default=None,
+                    help="贴字锚点重排用的 anchors.json(word_align 产出);"
+                         "未传时自动探测 plan 同目录 anchors.json")
+    ap.add_argument("--print-tiezi", action="store_true",
+                    help="干跑:只打印贴字轨每条(文本/落位/来源),不建草稿")
     # draft
     ap.add_argument("--drafts-dir", default=config.JY_DRAFTS_DIR,
                     help=r'剪映草稿根目录,如 "D:\jianying\JianyingPro Drafts"(或设 DAIHUO_JY_DRAFTS)')
@@ -281,6 +374,18 @@ if __name__ == "__main__":
     timing = json.load(open(tj)) if tj and os.path.exists(tj) else None
     print(f"[deliver] 字幕时间轴: {'timing.json 精确' if timing else '字数占比粗对齐(无 timing.json)'}")
 
+    if a.print_tiezi:  # 干跑贴字轨,不碰剪映草稿箱
+        if not a.shotlist:
+            sys.exit("[deliver] --print-tiezi 需要 --shotlist")
+        anchors = load_anchors(a.anchors, a.plan)
+        seg_starts = plan_seg_starts(segs)
+        entries = tiezi_entries(a.shotlist, segs, seg_starts, anchors)
+        print(f"[deliver] 贴字轨干跑({len(entries)} 条,规划口径 seg_starts):")
+        for ot, s0, s1, src in entries:
+            print(f"  {s0:7.2f}–{s1:7.2f}s  [{src}]  {ot}")
+        sys.exit(0)
+
+    anchors = load_anchors(a.anchors, a.plan) if a.shotlist else None
     if a.mode in ("draft", "both"):
         if not a.drafts_dir:
             sys.exit("[deliver] draft 模式需要 --drafts-dir 或环境变量 DAIHUO_JY_DRAFTS")
@@ -290,7 +395,7 @@ if __name__ == "__main__":
             # "run",多条片子的草稿全撞名「run」(热敷披肩2 实撞)——往上取一级项目名
         deliver_draft(segs, a.clips, a.audio_dir, timing, a.drafts_dir, name,
                       trim_to_plan=a.trim_to_plan, size=a.size,
-                      shotlist_path=a.shotlist, replace=a.replace)
+                      shotlist_path=a.shotlist, replace=a.replace, anchors=anchors)
     if a.mode in ("final", "both"):
         out = a.out or (os.path.splitext(a.full)[0] + "_成品.mp4")
         deliver_final(segs, a.clips, a.audio_dir, timing, a.full, out,

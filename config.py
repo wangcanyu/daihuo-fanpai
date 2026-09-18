@@ -215,6 +215,14 @@ def jimeng_env():
 
 COSYVOICE_HOME = os.environ.get("COSYVOICE_HOME", os.path.expanduser("~/CosyVoice"))
 
+# 词级转写专用解释器(faster-whisper + torch CPU),word_align.py 用(09-18 加)。
+# ★引擎主解释器没装 faster-whisper(torch 太大,不拖进主环境),必须 subprocess 到
+#   这台专用解释器跑;whisper 模型直接给模型名('small'/'medium'/'large-v3'),
+#   走 HF 缓存,不重复下载。
+FW_PYTHON = os.environ.get(
+    "DAIHUO_FW_PYTHON",
+    "C:/Users/gao/AppData/Local/Programs/Python/Python313/python.exe")
+
 # 反推/评委用的 Seed 模型:公共模型名直调(实测可用),不再依赖私人 endpoint ID(ep-xxx)。
 # 换模型/换 endpoint 用环境变量覆盖,不改代码。
 # ★默认模型必须跟着【计费口子】走 —— 套餐里没有 pro,只有 turbo。

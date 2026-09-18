@@ -15,6 +15,8 @@ tts_segments.py — 配音模块(口播+旁白)
 """
 import argparse, json, os, subprocess, tempfile
 
+import dualtext  # 显示|发音 双文本(09-18);无标记恒等透传,默认路径不受影响
+
 from config import COSYVOICE_HOME
 COSY_PY = f"{COSYVOICE_HOME}/.venv/bin/python"
 COSY_DRAMA = os.path.expanduser("~/.claude/skills/tts-drama/scripts/cosy_drama.py")
@@ -87,12 +89,17 @@ def synth(plan_path, out_dir, voices, instruct, pron_fix_path=None, default_spk=
         for j, (spk, txt) in enumerate(subs):
             if spk not in voices:
                 spk = default_spk
-            t2 = apply_pron_fix(txt, extra, haishen)  # ★读音修正
-            if t2 != txt:
+            disp, spoken = dualtext.parse(txt)  # 显示上字幕,发音喂 TTS
+            for ch in ("<", "@", "{"):  # ★同 tts_cosy:发音文本残留标记=硬报错(防标记被念出来)
+                if ch in spoken:
+                    raise ValueError(
+                        f"[tts] {s['seg']} 发音文本含标记字符 {ch!r}: {spoken!r}")
+            t2 = apply_pron_fix(spoken, extra, haishen)  # ★读音修正
+            if t2 != spoken:
                 fixed_any.append(s["seg"])
             sid = f"{s['seg']}__{j}"
             lines.append({"id": sid, "voice": spk, "instruct": instruct, "text": t2})
-            ids.append((sid, spk, txt))  # txt=正字原文(字幕用),t2=读音修正后(只喂TTS)
+            ids.append((sid, spk, disp, t2))  # disp=显示文本(字幕用),t2=发音修正后(只喂TTS)
         seg_subs[s["seg"]] = ids
     if fixed_any:
         print(f"[tts] 读音修正生效于段: {sorted(set(fixed_any))}")
@@ -112,13 +119,14 @@ def synth(plan_path, out_dir, voices, instruct, pron_fix_path=None, default_spk=
     timing = {}
     for seg, subids in seg_subs.items():
         rows = []
-        for sid, spk, txt in subids:
+        for sid, spk, disp, t2 in subids:
             w = os.path.join(out_dir, f"{sid}_{spk}.wav")
             if os.path.exists(w):
                 d = float(subprocess.check_output(
                     ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
                      "-of", "csv=p=0", w]).strip())
-                rows.append({"speaker": spk, "text": txt, "dur": round(d, 3)})
+                # text 存 display(字幕用),text_spoken 存实际喂 TTS 的发音文本(备查)
+                rows.append({"speaker": spk, "text": disp, "text_spoken": t2, "dur": round(d, 3)})
         if rows:
             timing[seg] = rows
     json.dump(timing, open(os.path.join(out_dir, "timing.json"), "w"),
@@ -127,7 +135,7 @@ def synth(plan_path, out_dir, voices, instruct, pron_fix_path=None, default_spk=
 
     # 每段: 把它的子句 wav(<sid>_<spk>.wav)按顺序拼成 <seg>.wav
     for seg, subids in seg_subs.items():
-        subwavs = [os.path.join(out_dir, f"{sid}_{spk}.wav") for sid, spk, _ in subids]
+        subwavs = [os.path.join(out_dir, f"{sid}_{spk}.wav") for sid, spk, _, _ in subids]
         subwavs = [w for w in subwavs if os.path.exists(w)]
         dst = os.path.join(out_dir, f"{seg}.wav")
         if len(subwavs) == 1:
