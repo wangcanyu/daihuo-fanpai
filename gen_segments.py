@@ -211,7 +211,12 @@ def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
                 tid = use.submit_mm(_imgs, None, seg["prompt"],
                                     duration=seg["duration"], resolution=res, ratio="9:16")
             else:
-                tid = use.submit_i2v(seg["anchor"], seg["prompt"],
+                # ★anchor 兜底同即梦腿:images 只有 1 张时走 submit_i2v,anchor=null 会
+                #   TypeError 整段废(09-18 燕麦西梅 S3/S5 实撞,jimeng 腿 09-16 已修,mmh3 漏了)
+                _anchor = seg.get("anchor") or (_imgs or [None])[0]
+                if not _anchor:
+                    raise ValueError(f"{name}: i2v 段缺 anchor/images,无法提交")
+                tid = use.submit_i2v(_anchor, seg["prompt"],
                                      duration=seg["duration"], resolution=res, ratio="9:16")
         print(f"[{name}] task={tid}", flush=True)
         json.dump({"seg": name, "backend": use_name, "task": tid},
@@ -313,7 +318,10 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
                     tid = use.submit_mm(seg["images"], wav, seg["prompt"],
                                         duration=seg["duration"], resolution="720p", ratio="9:16")
                 else:
-                    tid = use.submit_i2v(seg["anchor"], seg["prompt"],
+                    _anchor = seg.get("anchor") or (seg.get("images") or [None])[0]
+                    if not _anchor:
+                        raise ValueError(f"{name}: i2v 段缺 anchor/images,无法提交")
+                    tid = use.submit_i2v(_anchor, seg["prompt"],
                                          duration=seg["duration"], resolution="720p", ratio="9:16")
                 print(f"  {use_name}_task={tid}", flush=True)
                 json.dump({"seg": name, "backend": use_name, "task": tid},

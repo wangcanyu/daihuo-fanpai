@@ -47,6 +47,28 @@ def main():
     from cosyvoice.cli.cosyvoice import CosyVoice, CosyVoice2
     import soundfile as sf
 
+    # ★torchaudio 2.11+ 的 load 改走 torchcodec,而 torchcodec 没有 Windows 版
+    #   (09-18 实撞:零样本路径 frontend._extract_speech_feat → load_wav → ImportError)。
+    #   用 soundfile 平替 load_wav(torchaudio 原来的后端就是它,语义一致);
+    #   frontend 是 from-import 绑名,两处引用都得补。
+    import torch as _t, torchaudio as _ta
+    def _load_wav_sf(wav, target_sr, min_sr=16000):
+        if isinstance(wav, _t.Tensor):
+            speech, sr = wav, target_sr
+        else:
+            data, sr = sf.read(str(wav), dtype="float32")
+            if getattr(data, "ndim", 1) > 1:
+                data = data.mean(axis=1)
+            speech = _t.from_numpy(data).unsqueeze(0)
+        if sr != target_sr:
+            assert sr >= min_sr, f"wav sample rate {sr} must be >= {min_sr}"
+            speech = _ta.transforms.Resample(orig_freq=sr, new_freq=target_sr)(speech)
+        return speech
+    import cosyvoice.utils.file_utils as _fu
+    _fu.load_wav = _load_wav_sf
+    import cosyvoice.cli.frontend as _fe
+    _fe.load_wav = _load_wav_sf
+
     segs = json.load(open(a.plan, encoding="utf-8"))
     os.makedirs(a.out_dir, exist_ok=True)
     all_d = "".join(s.get("dialogue") or "" for s in segs)
@@ -56,7 +78,8 @@ def main():
 
     if a.voice_ref:
         cv = CosyVoice2(f"{HOME}/pretrained_models/CosyVoice2-0.5B", load_jit=False, load_trt=False)
-        ref, _ = sf.read(a.voice_ref)
+        # ★传路径不传 numpy:load_wav 需要真实采样率才能正确重采样,numpy 会丢 sr
+        ref = a.voice_ref
         synth = lambda t: list(cv.inference_zero_shot(t, a.voice_ref_text, ref,
                               stream=False))[0]["tts_speech"].numpy().reshape(-1)
     else:

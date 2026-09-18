@@ -172,9 +172,17 @@ def deliver_draft(segs, clips_dir, audio_dir, timing, drafts_dir, name,
             span_us = int((float(s.get("end", 0)) - float(s.get("start", 0))) * 1e6)
             if 0 < span_us < use_us:
                 use_us = span_us
+        wav_src = os.path.join(audio_dir, f"{nm}.wav") if audio_dir else ""
+        # ★逐段配音口径与 assemble._trim_target 对齐:B模式 TTS 配音比原片跨度长时,
+        #   assemble 是【视频段加长迁就配音】max(span,wav),不是剪配音——旧版这里裁严了,
+        #   草稿比成片短一截还把台词剪成半句(09-18 燕麦西梅实撞:草稿14.8s剪断"西梅芭乐
+        #   奇亚籽燕麦片",成片19.5s才是全的;注释却写着"与assemble口径一致",A模式 wav≈span
+        #   从来不暴露)。
+        if trim_to_plan and wav_src and os.path.exists(wav_src):
+            wd = int(dur(wav_src) * 1e6)
+            use_us = min(max(use_us, wd), mat.duration)
         script.add_segment(jy.VideoSegment(mat, jy.Timerange(t_us, use_us),
                                            source_timerange=jy.Timerange(0, use_us)), "主视频")
-        wav_src = os.path.join(audio_dir, f"{nm}.wav") if audio_dir else ""
         if wav_src and os.path.exists(wav_src):
             wav = os.path.join(mat_dir, f"{nm}.wav")
             shutil.copy(wav_src, wav)
