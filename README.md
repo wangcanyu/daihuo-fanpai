@@ -30,13 +30,21 @@
 → 1.7 ★场景(scene_plan 收敛逐镜场景 → make_scene 出场景板)
 → 1.8 ★说话人标注(speaker_tag:逐句判 旁白/同期声 + 说话人 → 人审 → 写回 shotlist)
 → 2 规划(plan_segments,完备性关卡+人审 segments.md) → [群戏:patch_cast 多人锚定+人数硬约束]
-→ [B模式:脚本本地化 localize_seed / localize_apply + 人审]
-→ 3 配音(tts_segments,多说话人+读音修正 | 原音复用:cut_audio 切段+2秒闸+精确字幕轴)
+→ [B模式:脚本本地化 localize_seed(弹药:qianchuan/ + 例文库 card_find 找参照)
+       → localize_check 读解对照闸 → localize_apply + 人审]
+→ 3 配音(tts_segments / tts_cosy CosyVoice:内置音色或零样本克隆,多说话人+读音修正 | 原音复用:cut_audio 切段+2秒闸+精确字幕轴)
 → 4 生成(gen_segments,即梦/火山/小云雀/海螺四后端;口播段可走即梦或海螺;
      --concurrency 并发提交(仅对验证过的后端);口播时长自动对齐配音;TNS/网络抖动自动重试)
 → 5 装配(assemble) → [质检:qc_lipsync 帧级口型 / ★qc_cast 人物跨镜一致性+旁白镜口型]
 → 6 评委(judge,成片+原片真对比) → 7 字幕(export_subs → SRT+贴字清单)
 → 8 交付(deliver:★剪映草稿——五轨就位打开即剪 | 烧字幕+BGM 一步到位成品)
+```
+
+旁路基建(例文库,反哺 B 模式台词):
+
+```
+batch_reverse 素材文件夹批量反推+标注+清洗 → punch_cards 例文库(五轴分类)
+→ card_find 按 beat/片型/类目/价格带检索 → 本地化时给每段找"同功能参照例文"
 ```
 
 ### 两条路线,由 `route.py` 判片型决定走哪条
@@ -67,7 +75,7 @@
 
 每一步只通过 JSON 文件/文件夹交接,**可插拔**——换反推 VLM、换视频模型、换 TTS,只改对应一个脚本(契约见 `DESIGN.md`)。
 
-## 引擎脚本(44)
+## 引擎脚本(59)
 
 | 脚本 | 作用 |
 |---|---|
@@ -108,6 +116,26 @@
 | `judge.py` | 评委:三看漏斗 90 分打分;`--target` 时**成片+原片一起上传做真保真度对比** |
 | `export_subs.py` | 导出句级 SRT 字幕 + 原片屏上贴字清单(剪映照抄) |
 | `vc_segments.py` | **换声不换演**(Seed-VC):原片切段音频转目标音色,表演节奏逐帧保留;治"复用原音怕查重/TTS重配丢表演"两难(单主播片;群戏需说话人分离未实现) |
+| `profile.py` | **立项档案**:反推之后、任何规划之前"理解这条片是什么"(视角/说话人结构/片型),产物自带 _meta 溯源(哪个模型/哪个口子/套餐还是按量) |
+| `director.py` | 提示词**约束维度检查表**(生成前最后一道闸):翻车案例没有一条是"提示词不漂亮",全是"某约束缺席"——缺席可机械检测,不需要 AI |
+| `h3_prompt.py` | segments.json → h3 英文 Ref2VA 六段式提示词并**灌回 plan**(gen_segments 只读 plan 不读 prompts/);灌回跳过即梦腿(即梦必须中文提示词) |
+| `fit_anchor.py` | 产品锚图扩 9:16 竖构图(即梦 image2image 5.0 订阅内免费);i2v 比例从输入图推断,方图不扩必出方片 |
+| `make_host.py` | 生成主播/场景锚图(5.0 @2k 免费)+ 可选超清;铁律:人物一律**生成新身份**,绝不抽帧照搬原片出镜人肖像 |
+| `seam_pick.py` | 一镜到底分段首帧续接的接缝挑选(1s 重合窗 SSIM 逐帧挑切点再拼) |
+| `prep_assets.py` | 产品图清洗预处理:真图当参考做白底化/去手持(image2image 免费)+ 可选 image_upscale 超清 |
+| `qc_assets.py` | **资产入库闸**:禁出部位/水印/透明底/无关元素/贴图小字,支持局部豁免——治"资产自伤"(三只手/手套被连构图抄走) |
+| `qc_voice.py` | 声纹聚类对账(speaker_tag 之外的第二证据腿:VLM 判轮次到顶 46/48,声纹补判) |
+| `calibrate_turns.py` | 说话轮次时间码校准(模型内部时钟漂移 ~3%/段 + 固定偏移,轮次边界错 0.5s 就够错) |
+| `localize_check.py` | B 模式本地化**读解对照闸**:逐段核对新台词还干不干原段原来该干的活(localize_apply 之后、tts 之前) |
+| `tts_cosy.py` | CosyVoice 直连配音(不依赖 tts-drama):内置音色/零样本克隆,多音字黑名单保护 |
+| `batch_reverse.py` | **例文库批量线**:素材文件夹全量反推(seed_reverse)→ beat_tag → 机器清洗闸 → 分类入库;容错/原子写/断点续跑 |
+| `beat_tag.py` | 逐镜标注**转化功能 + 情绪任务**(钩子/痛点/价格机制/信任背书/卖点证明/CTA);B 模式重写台词时守住转化结构 |
+| `card_harvest.py` | 把跑完的复刻 run 沉淀成例文卡(带 beat 标注的逐段台词 + 片型/类目/价格带/judge 分) |
+| `card_find.py` | 例文卡检索:beat 功能第一过滤,片型/类目/价格带/钩型加分——B 模式本地化"找参照"用 |
+| `card_verify.py` | 外部例文卡抽检收录:verified=false 入库,每批抽 10% 人工对原片,≥95% 合格整批翻 true |
+| `fix_cards.py` | 批量卡清洗:hook_type 词表归一 / beat 全空重建 / 手工修正清单 |
+| `review_board.py` | 例文卡人审板(本地自包含 HTML):翻页看图剔除不对味的,导出决策 JSON |
+| `review_server.py` | 一次性人审服务:管线卡在"需要人工确认"步时用(asset_board 的服务层),人点完直接回写 |
 | `deliver.py` | **交付**(`--trim-to-plan/--size` 需与装配同口径):剪映草稿(视频/配音/字幕/贴字参考/空BGM 五轨,素材自包含,打开草稿箱即剪)或烧字幕+BGM 成品;字幕轴优先吃 TTS 句级真实时长 |
 | `config.py` | 密钥/模型/路径集中配置(全部环境变量可覆盖,无硬编码) |
 
@@ -287,7 +315,7 @@ assets_lib/
 
 ## 方法论弹药包(未包含)
 
-B 模式的台词本地化依赖 `qianchuan/` 千川方法论弹药包(选题/句式/跨类目复制/诊断rubric/合规红线),蒸馏自付费课程,**本仓库不含**。可自备一套按 `localize_seed.py` 的 `QC_FILES` 约定放入;A 模式忠实复刻不需要它。
+B 模式的台词本地化依赖两套弹药:**① `qianchuan/` 千川方法论弹药包**(选题/句式/跨类目复制/诊断rubric/合规红线),蒸馏自付费课程,**本仓库不含**,可自备一套按 `localize_seed.py` 的 `QC_FILES` 约定放入;**② `punch_cards/` 例文库**(1200+ 条爆款素材反推成的结构化例文卡,五轴分类法见 `punch_cards/TAXONOMY.md`,检索用 `card_find.py`)——分类法与工具入库,卡片 JSON 本身(竞品素材反推产物)**本仓库不含**,用 `batch_reverse.py` 对自己采集的素材批量生产。A 模式忠实复刻两者都不需要。
 
 ## 缘起
 
