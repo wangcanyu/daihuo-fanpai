@@ -795,7 +795,14 @@ def build(seg, shots, cfg, en):
     #   模型没有皂的参考只能瞎编(08-11 爆爆朵一 S3 编出绿叶软包装袋;23/58 段中招)。
     host_a = cfg.get("host_anchor")
     prod_only = [p for p in imgs if p != host_a]        # 先剥掉主播,语义归一
-    if len(labels) < len(prod_only) or not labels:
+    # ★exclude_forms 支持 "*":产品未登场段(如边走边说的开场)一张产品图都不挂。
+    #   旧设计保底"至少留一张产品图"防自由发挥,但它把"该段本来就不该有产品"的路堵死了
+    #   (09-18 燕麦西梅 S1:走路开场被强挂包装袋,exclude_forms 列满三形态也只告警不清除)。
+    _ex_all = "*" in set((cfg.get("exclude_forms") or {}).get(seg["seg"]) or [])
+    if _ex_all:
+        labels, prod_only = [], []
+        print(f"[h3] {seg['seg']} exclude_forms=* 产品未登场段,不挂任何产品图")
+    elif len(labels) < len(prod_only) or not labels:
         try:
             from plan_segments import pick_product_anchors, merged_form_map
             got, _miss = pick_product_anchors(shots, cfg.get("products", {}), merged_form_map(cfg))
