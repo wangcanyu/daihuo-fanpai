@@ -271,3 +271,26 @@ def _jy_drafts():
 
 JY_DRAFTS_DIR = _jy_drafts()
 JY_PYTHON = os.path.expanduser(os.environ.get("DAIHUO_JY_PYTHON", "~/.venv-jianying/bin/python"))
+
+
+def resolve_asset_refs(cfg):
+    """Phase 6 统一资产库:把 assets.json 里的 @引用 解析成库内实际路径。
+      "@host:西梅主播" → 库内锚图;"@product:西梅麦片/包装袋正面" → 库内形态图;
+      普通路径原样返回。
+    ★只在【入口】解一次(plan_segments/h3_prompt 读完 assets.json 立刻过一遍),
+      下游十几个读取点看到的就是普通绝对路径,不用各自认识 @ 语法 —— 和 h3 在入口
+      洗场景 desc 的教训一样:同一样东西有多个出口时,唯一可靠的做法是在源头处理一次。
+      没有 @ 引用时逐字节原样返回(向后兼容硬要求,fast-path 判空直接放行,
+      连 asset_store 都不 import —— 没库的环境跑旧 assets.json 不该多一个依赖)。"""
+    def _is_ref(v):
+        return isinstance(v, str) and v.startswith("@")
+    prods = cfg.get("products") or {}
+    if not _is_ref(cfg.get("host_anchor")) and not any(_is_ref(v) for v in prods.values()):
+        return cfg
+    import asset_store
+    cfg = dict(cfg)
+    if _is_ref(cfg.get("host_anchor")):
+        cfg["host_anchor"] = asset_store.resolve(cfg["host_anchor"])
+    cfg["products"] = {k: (asset_store.resolve(v) if _is_ref(v) else v)
+                       for k, v in prods.items()}
+    return cfg

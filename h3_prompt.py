@@ -1202,6 +1202,9 @@ def main():
     segs_raw = json.loads(json.dumps(segs))   # 深拷贝,用于 .bak_h3 备份
     sl = {str(s["shot_id"]): s for s in json.load(open(a.shotlist))["shots"]}
     cfg = json.load(open(a.assets))
+    # Phase 6:@host:/@product: 引用在入口统一解析成库内路径;无 @ 引用时原样返回。
+    from config import resolve_asset_refs
+    cfg = resolve_asset_refs(cfg)
     if a.off_framing != "auto":
         cfg["off_window_framing"] = (a.off_framing == "on")
     cfg["_cast"] = load_cast(a.assets, cfg)

@@ -436,6 +436,10 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
          hard_max_cuts=None, by_leg=False, hero_strict=False, legacy_prompt=False):
     sl = json.load(open(shotlist_path))
     cfg = json.load(open(assets_path))
+    # Phase 6:@host:/@product: 引用在入口统一解析成库内路径;无 @ 引用时原样返回,
+    # 行为逐字节不变(向后兼容硬要求)。
+    from config import resolve_asset_refs
+    cfg = resolve_asset_refs(cfg)
     host = cfg.get("host_anchor", "")
     host_desc = cfg.get("host_desc", "")     # 主播外形一句话(发型/上衣/气质),钉死跨段穿着一致
     prod_desc = cfg.get("product_desc", "产品")

@@ -13,7 +13,7 @@ gen_segments.py — 生成消费端(吃 plan_segments 的方案 → 串行调即
 用法: python3 gen_segments.py segments.json --clips ./clips [--audio-dir ./audio/seg]
                                 [--only S1,S3] [--dry-run]
 """
-import argparse, json, math, os, re, subprocess, time, urllib.request
+import argparse, json, math, os, re, shutil, subprocess, time, urllib.request
 
 from config import DOWNLOAD_PROXY, jimeng_env
 import config as _cfg
@@ -226,6 +226,7 @@ def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
             money = (usage or {}).get("thirdPartyConsumeMoney")
             extra = f"  实扣¥{money}" if money else f"  usage={usage.get('total_tokens') or usage or '?'}"
             print(f"[{name}] ★完成 {res_//1024}KB{extra}", flush=True)
+            _clip_store_seg(seg, dst)
             return {"seg": name, "money": money}
         print(f"[{name}] {res_}  task={tid} 可补抓", flush=True)
         return {"seg": name, "error": str(res_), "task": tid}
@@ -237,6 +238,93 @@ def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
 # ★leg → (后端, 即梦档位) 的派发表。plan_segments --by-leg 会给每段打 leg 标记。
 LEG_DISPATCH = {"mmh3": ("mmh3", None), "rh": ("rh", None),
                 "jimeng": (None, "seedance2.0_vip"), "jimeng25": (None, "seedance2.5")}
+
+
+# ─── Phase 6:产物复用 + 失败打捞(统一资产库 asset_store)──────────────────
+
+def _seg_identity(seg, use_name, model, res, audio_dir, run_name):
+    """该段本次提交的内容寻址身份 (key, meta),产物复用/入库共用。
+    ★anchors 必须复刻各腿【实际送出】的图清单,和提交路径走同一套选图逻辑 ——
+      选图不一致 key 就永远对不上,复用全程落空还查不出原因(白做的功能)。
+      key 字段清单钉死在 asset_store.clip_key 的注释里。"""
+    import asset_store
+    imgs = list(seg.get("images") or [])
+    if seg["type"] == "mm":
+        anchors = imgs
+        wav = drive_wav(audio_dir, seg["seg"])
+        if wav:
+            # ★口播段的驱动音轨决定口型和台词:同图不同音 = 完全不同的产物,必须当锚进 key
+            anchors = anchors + [wav]
+    elif use_name in ("mmh3", "rh") and len(imgs) > 1:
+        anchors = imgs                       # h3 规范吃多图(_gen_alt 同款分流)
+    else:
+        anchor = seg.get("anchor") or (imgs or [None])[0]
+        if not anchor:
+            return None, None
+        if use_name in (None, "jimeng"):
+            # 即梦腿提交时会把 anchor 换成同名 _916 竖版(submit() 内逻辑),key 要跟着换
+            cand = re.sub(r"\.(png|jpg|jpeg)$", "_916.png", anchor, flags=re.I)
+            if cand != anchor and os.path.exists(cand):
+                anchor = cand
+        anchors = [anchor]
+    backend = use_name or "jimeng"
+    info = asset_store.clip_explain(seg["prompt"], anchors, seg["duration"], model, res, backend)
+    meta = {"prompt_sha": info["prompt_sha"], "anchors_sha": info["anchors_sha"],
+            "duration": seg["duration"], "model": model, "res": res, "backend": backend,
+            "created": time.strftime("%Y-%m-%d %H:%M:%S"), "source_run": run_name,
+            "seg": seg["seg"]}
+    return info["key"], meta
+
+
+def _clip_store_seg(seg, dst):
+    """生成成功落盘后顺手把产物登记进统一资产库(下次同 prompt+同锚图+同参数直接复用)。
+    ★入库失败只警告不阻断 —— 库是省钱优化,不能反噬生成主流程。"""
+    c = seg.get("_clip")
+    if not c:
+        return
+    try:
+        import asset_store
+        asset_store.clip_store(c["key"], dst, c["meta"])
+        print(f"[入库] {seg['seg']} → clips/{c['key']}", flush=True)
+    except Exception as e:
+        print(f"[入库][⚠] {seg['seg']} 登记失败({type(e).__name__}: {str(e)[:80]}),不影响本次产物", flush=True)
+
+
+def _salvage(meta_path, dst):
+    """失败打捞:mp4 没了但 meta.json 还在 → 按任务号补抓已提交未下载的段。
+    ★只查询+下载,不重新提交(查询/下载不计费);任务已死(查询失败/明确 fail)
+      才返回 False 让上层重新提交。轮询预算给得比正常生成短:任务早该出了,
+      等不到多半是死了,别在这儿空等一小时。"""
+    try:
+        meta = json.load(open(meta_path))
+    except Exception:
+        return False
+    seg = meta.get("seg", "?")
+    if meta.get("task"):                         # mmh3/rh 腿存的是 task
+        backend = meta.get("backend", "mmh3")
+        print(f"[打捞] {seg} meta 里有 {backend} 任务 {meta['task']},先试补抓(不重提、不计费)", flush=True)
+        try:
+            mod = _load_backend(backend)
+            res, _ = mod.wait_download(meta["task"], dst, tries=30, gap=10)
+        except Exception as e:
+            res = f"{type(e).__name__}: {str(e)[:100]}"
+        if isinstance(res, int):
+            print(f"[打捞] 成功 ← 任务 {meta['task']},{res // 1024}KB,零提交零扣费", flush=True)
+            return True
+        print(f"[打捞] 失败({res}),转重新提交", flush=True)
+        return False
+    if meta.get("submit_id"):                    # 即梦腿存的是 submit_id
+        sid = meta["submit_id"]
+        print(f"[打捞] {seg} meta 里有即梦任务 {sid},先试补抓(不重提)", flush=True)
+        try:
+            res = wait_download(sid, dst, tries=10, gap=15, model="seedance2.0_vip")
+        except Exception as e:
+            res = f"{type(e).__name__}: {str(e)[:100]}"
+        if isinstance(res, int) and res > 0:
+            print(f"[打捞] 成功 ← submit_id={sid},{res // 1024}KB,零提交", flush=True)
+            return True
+        print(f"[打捞] 失败({res}),转重新提交", flush=True)
+    return False
 
 
 def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_backend="jimeng",
@@ -274,6 +362,44 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
             return (_load_backend(bk), bk) if bk else (None, "jimeng")
         return (alt, i2v_backend) if s["type"] == "i2v" else (
             (mm_alt, mm_backend) if s["type"] == "mm" else (None, ""))
+
+    def _dispatch(s):
+        """_backend_of 加 model/res —— 产物 key 要用(与提交路径同一派发口径)。"""
+        use, use_name = _backend_of(s)
+        if use is None:
+            jm_seg = jm
+            if auto_leg and s.get("leg") in LEG_DISPATCH:
+                jm_seg = LEG_DISPATCH[s["leg"]][1] or jm
+            return None, "jimeng", jm_seg, jimeng_res
+        mdl = getattr(use, "MODEL_ID", None) or getattr(use, "MODEL", None) or use_name
+        return use, use_name, mdl, alt_res
+
+    # ─── Phase 6 预检:先查产物库(命中→复制,零提交),再按 meta 补抓(不重提),
+    #     都没戏才轮到下面的提交路径。dry-run 不动 clips 目录,跳过整个预检。───
+    run_name = os.path.basename(os.path.dirname(os.path.abspath(clips_dir)))
+    if not dry and todo:
+        import asset_store
+        done = []
+        for s in todo:
+            name = s["seg"]; dst = os.path.join(clips_dir, f"{name}.mp4")
+            if s["type"] == "mm":
+                fit_duration_to_audio(s, audio_dir)   # 时长先定 key 才准(幂等,后面再调无副作用)
+            use, use_name, mdl, res_ = _dispatch(s)
+            key, cmeta = _seg_identity(s, use_name, mdl, res_, audio_dir, run_name)
+            if key:
+                s["_clip"] = {"key": key, "meta": cmeta}     #  stash 给生成成功后的入库用
+                hit = asset_store.clip_lookup(key)
+                if hit:
+                    shutil.copy2(hit, dst)
+                    src = asset_store.clip_info(key).get("source_run") or "?"
+                    print(f"[复用] {name} ← {key}(原 {src}),跳过提交", flush=True)
+                    done.append(s)
+                    continue
+            mp = os.path.join(clips_dir, f"{name}.meta.json")
+            if os.path.exists(mp) and _salvage(mp, dst):
+                done.append(s)
+        if done:
+            todo = [s for s in todo if s not in done]
 
     pool_segs = [s for s in todo
                  if _backend_of(s)[0] is not None and _backend_of(s)[1] in CONCURRENT_BACKENDS]
@@ -329,6 +455,7 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
                 res, usage = use.wait_download(tid, dst)
                 if isinstance(res, int):
                     print(f"  [downloaded/{use_name}] {name}.mp4 {res//1024}KB  usage={usage.get('total_tokens') or usage or '?'}")
+                    _clip_store_seg(seg, dst)
                 else:
                     print(f"  [{res}]  task={tid} 可补抓")
             except Exception as e:
@@ -356,6 +483,7 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
             res = wait_download(sid, dst, model=jm)
             if isinstance(res, int) and res > 0:
                 print(f"  [downloaded] {name}.mp4 {res//1024}KB")
+                _clip_store_seg(seg, dst)
             elif res is None:
                 print(f"  [pending] 未完成,submit_id={sid} 稍后补抓")
             else:
