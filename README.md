@@ -1,3 +1,14 @@
+<table>
+  <tr>
+    <td width="200" valign="middle"><a href="https://metaso.cn/minimax-h3/?s=qdb7b7f2"><img src="metaso-h3.png" alt="秘塔科技 MetaSOTA" width="180"></a></td>
+    <td valign="middle">
+      <b>MiniMax H3 视频生成 API｜秘塔科技</b><br>
+      秘塔科技提供高性价比的 MiniMax H3 视频生成服务:<b>768P 仅 0.09 元/秒,2K 仅 0.15 元/秒</b>。支持原生 2K、音画同步,API 兼容 <b>OpenAI 协议</b>,同时支持 <b>ComfyUI</b>,无需自行部署 GPU。<br>
+      🎁 通过 <a href="https://metaso.cn/minimax-h3/?s=qdb7b7f2">专属链接注册</a>,即可领取赠送额度及专属优惠。
+    </td>
+  </tr>
+</table>
+
 <p align="center"><img src="cover.png" width="760" alt="daihuo-fanpai"></p>
 <p align="center"><b>中文</b> · <a href="README.en.md">English</a></p>
 
