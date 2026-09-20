@@ -21,6 +21,24 @@ os.chdir(HOME)
 CAN_WORDS = ["参加", "参与", "参考", "参观", "参谋", "参军", "参赛", "参展", "参数",
              "参照", "参差", "参悟", "参禅", "参政", "参议", "参股", "参保"]
 
+# ★多音字读音规则表(带货语域,09-20):key 的 spoken 一律按 value 同音字念。
+#   起因:C 模式台词是 LLM 自动写的,没人插 dualtext 标记,"QQ弹弹"被念成 dàndàn
+#   (word_align 对照表里"弹→淡淡"的 replacement 就是实锤——**同音异形 replacement
+#   是多音字读错的信号,不是 ASR 噪声**,第一遍被误判成噪声放过了)。
+#   规则只放【词级】(弹弹/弹牙/Q弹),单字"弹"不收(子弹/弹药会误伤)。
+PRON_RULES = {
+    "QQ弹弹": "QQ谈谈", "Q弹": "Q谈", "弹弹": "谈谈", "弹牙": "谈牙",
+    "弹力": "谈力", "弹嫩": "谈嫩", "弹润": "谈润",
+}
+
+
+def apply_pron_rules(text):
+    """词级读音替换( spoken 用,display 不变)。assets.json 可放 "pron_rules" 扩充。"""
+    hit = [k for k in PRON_RULES if k in text]
+    for k in hit:
+        text = text.replace(k, PRON_RULES[k])
+    return text, hit
+
 
 def apply_pron_fix(text, haishen):
     if not haishen:
@@ -101,6 +119,9 @@ def main():
                     f"[tts_cosy] {s['seg']} 发音文本含标记字符 {ch!r}: {spoken!r} "
                     f"(锚点 @{{名}} 须先剥除,dualtext 用 <显示|发音> 语法)")
         txt = apply_pron_fix(spoken, haishen)
+        txt, pr_hit = apply_pron_rules(txt)
+        if pr_hit:
+            print(f"  [{s['seg']}] 读音规则: {'、'.join(pr_hit)} → 同音替换", flush=True)
         t0 = time.time()
         wav = synth(txt)
         dur = len(wav) / 22050.0

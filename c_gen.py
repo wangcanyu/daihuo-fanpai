@@ -83,11 +83,14 @@ def target_duration(require):
     return float(m.group(1)) if m else None
 
 
-def pick_card(cards, goal, category, price_band, target_dur, top=3):
-    """选结构模板卡。打分:时长贴近目标 > 类目命中 > verified > judge 分 > 结构丰富度。
+def pick_card(cards, goal, category, price_band, target_dur, facts_text="", top=3):
+    """选结构模板卡。打分:同品类亲和(硬) > 时长贴近 > 类目命中 > verified > judge > 结构丰富度。
     ★时长是第一权重(09-20 实撞):C 模式没有原片可参照,卡片 duration 就是成片时长的锚——
       57.7s 的卡靠"类目精确命中"赢了 17.5s 的目标,33 拍骨架压进 18s 必然变形,
       而且校验的±25%带还和用户要求直接打架(首尾两张皮)。
+    ★同品类亲和也是硬权重(09-20 之二实撞):两张海参卡(35s 整、17/21 拍)输给一张
+      软毛牙刷卡(5 拍),只因牙刷卡时长离目标近 0.65 分——时长微差绝不许压过
+      "卡和产品同一个类目"。牙刷卡出的海参片骨架单薄,用户一耳朵听出水。
     ★group_skit 扣分:C 模式单主播硬约束,群戏卡的骨架天生带多人,借了必打架。"""
     scored = []
     for c in cards:
@@ -97,14 +100,18 @@ def pick_card(cards, goal, category, price_band, target_dur, top=3):
         if dur <= 0 or not (c.get("beats") or []):
             continue
         s = 0.0
+        # 同品类亲和:卡片类目/产品词出现在新产品事实里 → 硬加 6 分
+        cat_words = {w for w in (str(c.get("category") or ""), str(c.get("product") or "")) if len(w) >= 2}
+        if facts_text and any(w in facts_text for w in cat_words):
+            s += 6
         if target_dur:
-            s -= abs(dur - target_dur) / 4
+            s -= abs(dur - target_dur) / 6      # 时长微差降权(原 /4,09-20 之二)
         if category and c.get("category") == category:
             s += 4
         if c.get("verified"):
             s += 2                     # 抽检制:没验过的卡分再高也往后排(09-08)
         s += (c.get("judge_score") or 0) / 50
-        s += min(len(c["beats"]), 12) / 12    # 结构丰富度:拍数太少的卡没有骨架可借
+        s += min(len(c["beats"]), 15) / 15      # 结构丰富度:拍数太少的卡没有骨架可借
         if c.get("type") == "group_skit":
             s -= 1.5
         if price_band and c.get("price_band") == price_band:
@@ -309,13 +316,25 @@ def validate(sl, card, cfg, blacklist, target_dur):
     return errors, warns
 
 
+_VISUAL_KEYS = ("action", "subject", "scene", "lighting", "person",
+                "product_in_frame", "key_colors", "camera", "shot_size")
+
+
 def _post_fix(sl):
     """机械修正(不信模型算的,自己算):
     ★is_opening_3s 按时间轴重算(start<3s);full_transcript 用逐镜 dialogue 重拼——
-      模型拼的全文和分镜台词常对不上,而下一段(word_align/字幕)只认分镜。"""
+      模型拼的全文和分镜台词常对不上,而下一段(word_align/字幕)只认分镜。
+    ★全角逗号归一(09-20 实撞):LLM 写的动作句用 U+FF0C 全角逗号,而 h3_prompt 的
+      剥词正则(_OUTFIT_FRAG 等)的否定字符类只有半角逗号——"身着白色上衣…"的
+      换装片段匹配直接吃完整句动作,提示词空镜。视觉层字段一律归一成半角逗号
+      (dialogue/onscreen_text 不动:字幕/TTS 断句照旧)。"""
     for s in sl["shots"]:
         s["is_opening_3s"] = float(s["start"]) < 3.0
         s["start"], s["end"] = round(float(s["start"]), 2), round(float(s["end"]), 2)
+        for k in _VISUAL_KEYS:
+            v = s.get(k)
+            if isinstance(v, str) and ("，" in v or "；" in v):
+                s[k] = v.replace("，", ",").replace("；", ";")
     sl["overall"]["full_transcript"] = "".join(
         (s.get("dialogue") or "") for s in sl["shots"])
     sl["video_info"] = {"duration": sl["shots"][-1]["end"], "width": 720, "height": 1280}
@@ -360,7 +379,8 @@ def main():
         print(f"[c_gen] 指定卡 {a.card} [{card.get('goal')}/{card.get('type')}/"
               f"{card.get('category')}] dur={card.get('duration')}s")
     else:
-        card = pick_card(card_find.load(), a.goal, a.category, a.price_band, tdur)
+        card = pick_card(card_find.load(), a.goal, a.category, a.price_band, tdur,
+                         facts_text=facts + (cfg.get("product_desc") or "") + (a.require or ""))
     print(f"[c_gen] 模板卡 = {card['card_id']} ({card.get('hook_type')}, "
           f"{len(card.get('beats') or [])}拍)")
 
