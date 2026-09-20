@@ -44,3 +44,6 @@ references/h3/runninghub-*.md
 
 # 手工备份文件(改动前留的副本,不入库)
 *.bak_*
+
+# README 复刻样例视频(刻意入库)
+!showcase/*.mp4
