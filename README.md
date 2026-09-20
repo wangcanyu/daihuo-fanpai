@@ -36,8 +36,8 @@
 
 <table>
 <tr>
-<td align="center"><b>B 模式·跨类目迁移</b><br>竞品 551 万曝光的参类爆款结构<br>→ 高小参鲜食海参(台词/包装/主播全换)<br><video src="https://raw.githubusercontent.com/wangcanyu/daihuo-fanpai/main/showcase/B%E6%A8%A1%E5%BC%8F_%E6%B5%B7%E5%8F%82%E8%BF%81%E7%A7%BB.mp4" controls muted width="260"></video></td>
-<td align="center"><b>B 模式·换品名轻复刻</b><br>椰奶西梅益生菌麦片爆款<br>→ 西梅芭乐奇亚籽燕麦片(台词复用,配音克隆)<br><video src="https://raw.githubusercontent.com/wangcanyu/daihuo-fanpai/main/showcase/B%E6%A8%A1%E5%BC%8F_%E8%A5%BF%E6%A2%85%E6%8D%A2%E5%93%81%E5%90%8D.mp4" controls muted width="260"></video></td>
+<td align="center"><b>B 模式·跨类目迁移</b><br>竞品 551 万曝光的参类爆款结构<br>→ 高小参鲜食海参(台词/包装/主播全换)<br><a href="https://github.com/wangcanyu/daihuo-fanpai/raw/main/showcase/B%E6%A8%A1%E5%BC%8F_%E6%B5%B7%E5%8F%82%E8%BF%81%E7%A7%BB.mp4"><img src="showcase/preview_%E6%B5%B7%E5%8F%82.gif" width="260" alt="海参迁移样例(点击播放)"></a><br><sub>▲ 点击播放完整视频</sub></td>
+<td align="center"><b>B 模式·换品名轻复刻</b><br>椰奶西梅益生菌麦片爆款<br>→ 西梅芭乐奇亚籽燕麦片(台词复用,配音克隆)<br><a href="https://github.com/wangcanyu/daihuo-fanpai/raw/main/showcase/B%E6%A8%A1%E5%BC%8F_%E8%A5%BF%E6%A2%85%E6%8D%A2%E5%93%81%E5%90%8D.mp4"><img src="showcase/preview_%E8%A5%BF%E6%A2%85.gif" width="260" alt="西梅换品名样例(点击播放)"></a><br><sub>▲ 点击播放完整视频</sub></td>
 </tr>
 </table>
 
