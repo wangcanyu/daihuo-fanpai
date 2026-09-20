@@ -4,6 +4,7 @@
     <td valign="middle">
       <b>MiniMax H3 视频生成 API｜秘塔科技</b><br>
       秘塔科技提供高性价比的 MiniMax H3 视频生成服务:<b>768P 仅 0.09 元/秒,2K 仅 0.15 元/秒</b>。支持原生 2K、音画同步,API 兼容 <b>OpenAI 协议</b>,同时支持 <b>ComfyUI</b>,无需自行部署 GPU。<br>
+      本项目近期复刻片全部实测跑在 H3 上:<b>出片稳定性好,效果基本追平 Seedance 2.0</b>,而这个价格意味着<b>抽卡不心疼</b>——同一镜头多抽几条挑最好的,成本还不到一杯奶茶。<br>
       🎁 通过 <a href="https://metaso.cn/minimax-h3/?s=qdb7b7f2">专属链接注册</a>,即可领取赠送额度及专属优惠。
     </td>
   </tr>
@@ -30,6 +31,17 @@
 | **A 量产模式** | 同产品全目录批量复刻(SOP 全自动) | 实测单日 16 条交付,后期稳定 40-60 分钟/条 |
 
 分数越高越"能跑量"。跨类目(理解后重构)分最高——**方法论指导的重构 > 机械复刻**。剧情流原片按千川 rubric 打分天然偏低,看保真度即可。历史最高三看分 75/90(口播型忠实复刻)。
+
+## 复刻样例(近期实跑)
+
+<table>
+<tr>
+<td align="center"><b>B 模式·跨类目迁移</b><br>竞品 551 万曝光的参类爆款结构<br>→ 高小参鲜食海参(台词/包装/主播全换)<br><video src="https://github.com/wangcanyu/daihuo-fanpai/raw/main/showcase/B模式_海参迁移.mp4" controls muted width="260"></video></td>
+<td align="center"><b>B 模式·换品名轻复刻</b><br>椰奶西梅益生菌麦片爆款<br>→ 西梅芭乐奇亚籽燕麦片(台词复用,配音克隆)<br><video src="https://github.com/wangcanyu/daihuo-fanpai/raw/main/showcase/B模式_西梅换品名.mp4" controls muted width="260"></video></td>
+</tr>
+</table>
+
+右片为全 H3 生成;左片主体镜头 H3 生成、少量形体特写镜走即梦 Seedance(两条腿按镜头类型路由)。15-60s 片长、逐段人审+QC 闸口。
 
 ## 流水线
 
