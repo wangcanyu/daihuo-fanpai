@@ -192,6 +192,18 @@ def deliver_draft(segs, clips_dir, audio_dir, timing, drafts_dir, name,
         if trim_to_plan and wav_src and os.path.exists(wav_src):
             wd = int(dur(wav_src) * 1e6)
             use_us = min(max(use_us, wd), mat.duration)
+        if trim_to_plan and s.get("talking"):
+            # ★talking 段与 assemble._talking_trim 同口径:按 qc_talking.json 的
+            #   ASR 语音尾 +0.35s 裁(模型语速慢于规划,按 span 裁必切半句,09-21 实撞:
+            #   成片 40.1s 而草稿按 span 裁成 35.0s,S6 又被截尾)
+            try:
+                _qc = json.load(open(os.path.join(os.path.dirname(os.path.abspath(clips_dir)),
+                                                  "qc_talking.json"), encoding="utf-8"))
+                _se = (_qc.get(nm) or {}).get("timing", {}).get("dur")
+                if _se:
+                    use_us = min(max(use_us, int((float(_se) + 0.35) * 1e6)), mat.duration)
+            except Exception:
+                pass
         script.add_segment(jy.VideoSegment(mat, jy.Timerange(t_us, use_us),
                                            source_timerange=jy.Timerange(0, use_us)), "主视频")
         if (wav_src and os.path.exists(wav_src)) or (s.get("talking") and _has_audio(src)):
