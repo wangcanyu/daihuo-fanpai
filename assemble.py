@@ -50,6 +50,22 @@ def _trim_target(s, audio_dir, master_audio=None):
     return span
 
 
+def _talking_trim(s, clips_dir):
+    """talking 段的裁剪目标:实测语音尾 + 0.35s 气口(不按规划 span——
+    模型语速比估算慢,按 span 裁必切半句(09-21 全talking片 6/6 段被截真实撞)。
+    语音尾取自 qc_talking.json 的 timing.dur(ASR 实测);没有则回落 span。"""
+    span = float(s.get("end", 0)) - float(s.get("start", 0))
+    qc = os.path.join(os.path.dirname(os.path.abspath(clips_dir)), "qc_talking.json")
+    try:
+        d = json.load(open(qc, encoding="utf-8"))
+        speech_end = (d.get(s["seg"]) or {}).get("timing", {}).get("dur")
+        if speech_end:
+            return round(float(speech_end) + 0.35, 3)
+    except Exception:
+        pass
+    return span if span > 0 else None
+
+
 def run(plan_path, clips_dir, audio_dir, out, trim_to_plan=False, master_audio=None,
         size="720x1280"):
     segs = json.load(open(plan_path))
@@ -68,7 +84,10 @@ def run(plan_path, clips_dir, audio_dir, out, trim_to_plan=False, master_audio=N
         #   A 模式配 --master-audio 直铺原音时更会累积错位。
         cut = []
         if trim_to_plan:
-            t = _trim_target(s, audio_dir, master_audio)
+            if s.get("talking"):
+                t = _talking_trim(s, clips_dir)     # ★talking:按实测语音尾裁,不按span
+            else:
+                t = _trim_target(s, audio_dir, master_audio)
             if t and vd > t + 0.05:
                 cut = ["-t", f"{t:.3f}"]; vd = t
         nv = os.path.join(work, f"{name}.mp4")

@@ -71,8 +71,8 @@ def fit_duration_to_audio(seg, audio_dir):
 
 def fit_duration_talking(seg):
     """★talking(音画同出)段没有 wav 可量:按台词 spoken 字数估时长。
-    语速系数 ~4.2 字/秒 —— 直播带货口播实测量级(exp_h3_talking:47字台词铺满 8.9s
-    属于偏快,4.2 是留余量的估法,宁多勿少,多要的尾帧 assemble 会裁掉)。
+    语速系数 ~3.4 字/秒(09-21 全talking片实测:模型带句间停顿,真实 3.5-4.0 字/秒;
+    原估 4.2 偏快,6/6 段语音溢出裁剪点被截尾——宁多勿少,多要的尾帧 assemble 裁掉)。
     数字先按读法展开再数字数(898→八百九十八 算 5 字,与真实念出来的时长对应)。
     clamp [4,15](mmh3 原生 duration 上下限);只上调不下调,与 fit_duration_to_audio 同哲学。"""
     dlg = (seg.get("dialogue") or "").strip()
@@ -82,9 +82,9 @@ def fit_duration_talking(seg):
     from word_align import strip_anchors, normalize    # 复用,别抄
     spoken = strip_anchors(dualtext.parse(dlg)[1], seg["seg"])[0]
     n = len(normalize(spoken))          # 去标点空白、数字转读法后的真实字数
-    est = max(4, min(15, math.ceil(n / 4.2)))
+    est = max(4, min(15, math.ceil(n / 3.4)))
     if est > seg["duration"]:
-        print(f"  [时长/talking] 台词{n}字 ≈{n/4.2:.1f}s > 规划{seg['duration']}s → 生成时长调为 {est}s")
+        print(f"  [时长/talking] 台词{n}字 ≈{n/3.4:.1f}s > 规划{seg['duration']}s → 生成时长调为 {est}s")
         seg["duration"] = est
 
 
@@ -412,8 +412,10 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
 
     # ─── Phase 6 预检:先查产物库(命中→复制,零提交),再按 meta 补抓(不重提),
     #     都没戏才轮到下面的提交路径。dry-run 不动 clips 目录,跳过整个预检。───
+    #   ★--no-reuse(09-21):QC-FAIL 后的定向重抽必须跳过复用——库里存的就是那张
+    #      FAIL 片,复用机制不知道它 FAIL,会"省钱"把废片再发回来(S6 实撞)。
     run_name = os.path.basename(os.path.dirname(os.path.abspath(clips_dir)))
-    if not dry and todo:
+    if not dry and todo and not os.environ.get("DAIHUO_NO_REUSE"):
         import asset_store
         done = []
         for s in todo:

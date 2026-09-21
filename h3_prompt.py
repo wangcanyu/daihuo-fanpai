@@ -790,7 +790,8 @@ _OFF_DROPPED = {}         # seg -> 因超长被迫丢掉换景别的段(超出�
 #   segments.json 段级 "talking": true(逐段开关),或 CLI --talking(全片,逐段标记优先)。
 # ★缺省语气 = 实验片验证过的那句;段级 "tone" 字段可覆盖,
 #   assets.json 的 "tone_map" 可按 beat(镜号/段名)再覆盖。
-DEFAULT_TALKING_TONE = "enthusiastic, fast-paced live-commerce sales tone"
+DEFAULT_TALKING_TONE = ("very energetic and passionate, fast-paced live-commerce "
+                        "sales tone, full of excitement and conviction")
 
 
 def _talking_speech_line(seg, shot, shot_idx, tone_map):
