@@ -412,6 +412,24 @@ if __name__ == "__main__":
     segs = json.load(open(a.plan))
     tj = os.path.join(a.audio_dir, "timing.json") if a.audio_dir else ""
     timing = json.load(open(tj)) if tj and os.path.exists(tj) else None
+    # ★talking 段没有 TTS timing:字幕轴取 qc_talking.json 的 ASR 实测语音窗
+    #   (09-21 实撞:没喂的话字幕按字数均摊,talking 有句间停顿必错位)
+    try:
+        _qc = json.load(open(os.path.join(os.path.dirname(os.path.abspath(a.clips)),
+                                          "qc_talking.json"), encoding="utf-8"))
+        n_t = 0
+        for s in segs:
+            if not s.get("talking"):
+                continue
+            t_ = (_qc.get(s["seg"]) or {}).get("timing") or {}
+            if t_.get("text") and t_.get("dur"):
+                timing = timing or {}
+                timing[s["seg"]] = {"text": t_["text"], "dur": float(t_["dur"])}
+                n_t += 1
+        if n_t:
+            print(f"[deliver] talking 段字幕轴: qc_talking 实测语音窗 × {n_t}")
+    except FileNotFoundError:
+        pass
     print(f"[deliver] 字幕时间轴: {'timing.json 精确' if timing else '字数占比粗对齐(无 timing.json)'}")
 
     if a.print_tiezi:  # 干跑贴字轨,不碰剪映草稿箱
