@@ -97,12 +97,15 @@ def build_entries(segs, seg_starts, timing):
                 #   <显示|发音>/@{锚点} 标记,消费处再过一遍兜底(恒等透传无代价)
                 sents = sentences(display_text(ln["text"]))
                 total = sum(len(x) for x in sents) or 1
-                s0 = t0 + off
+                # ★行可带绝对起点 start(talking 的逐句真实窗,09-21):
+                #   句间有停顿,累积平铺会把后句压进前句的停顿里
+                base = t0 + (ln["start"] if ln.get("start") is not None else off)
+                s0 = base
                 for x in sents:
                     d = ln["dur"] * len(x) / total
                     entries.append((s0, min(s0 + d, t0 + vd), x))
                     s0 += d
-                off += ln["dur"]
+                off = (ln["start"] if ln.get("start") is not None else off) + ln["dur"]
         else:  # 粗对齐兜底
             d = display_text((s.get("dialogue") or "").strip())  # 取 display+剥锚点
             if not d:
@@ -422,10 +425,27 @@ if __name__ == "__main__":
             if not s.get("talking"):
                 continue
             t_ = (_qc.get(s["seg"]) or {}).get("timing") or {}
-            if t_.get("text") and t_.get("dur"):
-                timing = timing or {}
-                timing[s["seg"]] = {"text": t_["text"], "dur": float(t_["dur"])}
-                n_t += 1
+            if not (t_.get("text") and t_.get("dur")):
+                continue
+            # ★逐句真实窗(09-21):词级窗按句分组 → 每句带绝对 start,
+            #   句间停顿不再被均摊吞掉( hypit 词级对齐的正主用法)
+            words = t_.get("words") or []
+            sents = sentences(display_text(t_["text"]))
+            lines, wi = [], 0
+            _PUNCT = set(",.;:?!,.;:?!、 \t")
+            for x in sents:
+                n = max(1, sum(1 for ch in x if ch not in _PUNCT))
+                grp = words[wi:wi + n]
+                wi += n
+                if grp:
+                    st, en = float(grp[0][1]), float(grp[-1][2])
+                    lines.append({"text": x, "start": round(st, 3),
+                                  "dur": round(max(en - st, 0.25), 3)})
+                else:   # 词窗耗尽(不应发生)→ 退化为该行无 start,累积平铺
+                    lines.append({"text": x, "dur": float(t_["dur"])})
+            timing = timing or {}
+            timing[s["seg"]] = lines if lines else {"text": t_["text"], "dur": float(t_["dur"])}
+            n_t += 1
         if n_t:
             print(f"[deliver] talking 段字幕轴: qc_talking 实测语音窗 × {n_t}")
     except FileNotFoundError:
