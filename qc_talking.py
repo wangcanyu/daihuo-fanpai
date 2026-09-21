@@ -117,7 +117,33 @@ def verbatim_qc(seg_name, dialogue, wav, model, cache_dir, threshold):
             if any((pos + k) in hit for k in range(w_)):
                 toks[si]["rel"] = "exact-in-group"  # 同音异形连坐被摘出,回到分子
             pos += w_
-    good_rels = ("exact", "merge", "split", "segdiff", "exact-in-group")
+    # ── 拼音平反(talking 专属,09-21):锁↔所、得↔的 这类【同音不同字】
+    #   ASR 只是猜错了字,声音是对的——talking 链的验收对象是【音】不是【字】,
+    #   否则 68.75% 的假 FAIL 会逼人白抽卡(S5 实测:16 字 issue 全是同音字)。
+    #   组内 replacement 且拼音序列能对上的,改标 exact-homophone(计入分子,
+    #   但 issues 里保留"同音"注记供人审)——真读错(改词/漏词)拼音对不上,不受影响。
+    try:
+        from pypinyin import pinyin as _py, Style as _PStyle
+        def _syls(s):
+            return [x[0] for x in _py(s, style=_PStyle.NORMAL, errors="ignore") if x[0].strip()]
+    except ImportError:
+        _syls = None
+    if _syls:
+        for g in groups:
+            if g["rel"] != "replacement":
+                continue
+            src = "".join(t["norm"] for t in toks[g["s0"]:g["s1"]])
+            ev = "".join(word_align.normalize(w["word"]) for w in words[g["e0"]:g["e1"]])
+            ss, es = _syls(src), _syls(ev)
+            hit = _lcs_src_positions(ss, es)         # 音节序列 LCS,逻辑同字符版
+            pos = 0
+            for si in range(g["s0"], g["s1"]):
+                w_ = max(1, len(toks[si]["norm"]))
+                if toks[si]["rel"] == "replacement" and \
+                        any((pos + k) in hit for k in range(w_)):
+                    toks[si]["rel"] = "exact-homophone"
+                pos += w_
+    good_rels = ("exact", "merge", "split", "segdiff", "exact-in-group", "exact-homophone")
     good = sum(1 for t in toks if t["rel"] in good_rels)
     rate = round(good / len(toks), 4) if toks else 0.0
     avg = round(sum(t["cost"] for t in toks) / len(toks), 3) if toks else 0.0

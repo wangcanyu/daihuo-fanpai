@@ -93,7 +93,7 @@ def run(plan_path, clips_dir, audio_dir, out, trim_to_plan=False, master_audio=N
         #   直接取 clip 内嵌音轨(0→vd,与画面同锚);没喂音频的段照旧铺 wav/静音。
         na = os.path.join(work, f"{name}.wav")
         wav = os.path.join(audio_dir, f"{name}.wav") if audio_dir else ""
-        has_embedded = wav and os.path.exists(wav) and _has_audio(clip)
+        has_embedded = (wav and os.path.exists(wav) or s.get("talking")) and _has_audio(clip)
         if has_embedded:
             subprocess.run(["ffmpeg", "-y", "-i", clip, "-vn", "-t", f"{vd}",
                             "-ar", "44100", "-ac", "2", na, "-loglevel", "error"], check=True)
