@@ -164,6 +164,7 @@ batch_reverse 素材文件夹批量反推+标注+清洗 → punch_cards 例文�
 | `word_align.py` | **词级对齐+语义锚**:faster-whisper 词级转写 + 有界 M:N DP 对齐(移植 hypit align.ts)→ `@{锚点}` 落到词级帧窗;副产品=TTS 漏读/读错证据级 QC 对照表 |
 | `grid_words.py` | **词标签帧网格**:抽帧拼网格、每格烧 timecode+当前词+上下文,`--around "短语"` 反查画面区间;反推输入升级与 QC 审查共用 |
 | `prompt_kit.py` + `prompt_kits/` | **提示词资产化三层**:契约段(带★出处置语)/轴选项(全是已验证原句)/槽位;plan_segments 与 h3_prompt 从 kit 装配,`--legacy-prompt` 一键回旧路径,sidecar 记录每段用了哪些块 |
+| `qc_talking.py` | **talking 段验收闸**:逐字 QC(clip 音轨转写+DP 对账台词,组内逐字平反)+ SyncNet 口型闸 + 字幕轴产出;FAIL 定向重抽 |
 | `c_gen.py` | **C 模式**:例文卡→全新 shotlist(选卡打分:时长贴近>类目>verified>拍数;台词/视觉全新,卡片只借骨架;黑名单+forms命中+时长校验) |
 | `asset_store.py` | **统一资产库**:模特库/产品库(形态+916)跨 run 复用,assets.json 用 `@host:id`、`@product:id/形态` 引用;生成产物内容寻址(hash=提示词+锚图字节+参数),重复段直接复用不重新烧;失败任务先补抓再重提 |
 | `deliver.py` | **交付**(`--trim-to-plan/--size` 需与装配同口径):剪映草稿(视频/配音/字幕/贴字参考/空BGM 五轨,素材自包含,打开草稿箱即剪)或烧字幕+BGM 成品;字幕轴优先吃 TTS 句级真实时长 |
@@ -371,6 +372,16 @@ B 模式的台词本地化依赖两套弹药:**① `qianchuan/` 千川方法论�
 - **合规自负**:食品别写疗效、不编明星背书、活动/价格须真实。
 
 ## 更新日志
+
+### 2026-09-21(之二) · H3 音画同出固化:口播段 talking 路径
+
+台词进 SHOT 描述、不给参考音频,H3 自己开口说话——口型同步是生成自带的
+(SyncNet -0.04s),TTS+音频驱动+装配对齐整条链在口播段可以退休。
+接入:`segments.json` 段级 `"talking": true` 或 `h3_prompt --talking`;语气按
+段/beat 可配;qc_talking.py 验收(逐字率 ≥0.85 + SyncNet ≤2帧 + conf≥3,
+FAIL 定向重抽);字幕轴从 DP 对齐产出,不依赖 TTS timing。实验片用户听感投票
+"很完美";价格机制词一次过审,1027 退避照旧。**两条链按片二选一:要品牌声
+(TTS 克隆)走旧链,要同步和情绪(talking)走新链。**
 
 ### 2026-09-21 · 口型漂移真相:病在装配簿记,不在模型重演 + 装配改用内嵌音轨
 

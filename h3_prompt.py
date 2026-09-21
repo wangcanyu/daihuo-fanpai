@@ -15,6 +15,9 @@ detailed_description / overall_soundscape / non_diegetic_music),正文英文、
 
 ★三条硬规已焊进产物:
   ① 台词绝不进 prompt(h3 的内容安全审查只审文本,台词/价格词必拒;口型靠 audioUrls 自带)
+     ——★例外:talking(音画同出)段【故意】把台词写进 SHOT 描述、不给参考音频,
+       让 H3 自己开口(09-21 exp_h3_talking 实证:逐字 3/3 全对、SyncNet -0.04s、
+       价格机制词一次过审)。段级 "talking": true 或 CLI --talking 开启,与现状链按片二选一。
   ② 人数硬约束句(不加会幻觉多生成人物)
   ③ 状态参考图(泡沫态/使用态这类)必须在该镜写死环境,否则会连背景光照一起迁移
 
@@ -90,6 +93,11 @@ LEGACY_BLOCKS = {
         "<Audio 1> is reused directly as the complete and only audio layer "
         "across the whole video. Do not generate any additional narration, voice or speech "
         "beyond <Audio 1>.",
+    # ★talking(音画同出)段的音景:没有 <Audio 1>,声音来自人物自己的台词。
+    #   措辞依据 09-21 exp_h3_talking 实证版("No background music" 等收尾句一次过审)。
+    "overall_soundscape_talking":
+        "The soundtrack consists solely of the host's spoken lines and the natural "
+        "ambient sounds of the scene. There is no background music.",
     "non_diegetic_music":
         "None. Do not add any background music.",
     "product_precedence":
@@ -100,6 +108,11 @@ LEGACY_BLOCKS = {
     "additional_constraints":
         "no subtitles, no captions, no on-screen text overlays, "
         "no logo, no watermark anywhere in the frame.",
+    # ★talking 段收尾约束:照旧禁字幕/水印,另加 "No background music"
+    #   (音画同出没有后期铺 BGM 的环节,模型自己配乐就直接进成片了)。
+    "additional_constraints_talking":
+        "no subtitles, no captions, no on-screen text overlays, "
+        "no logo, no watermark anywhere in the frame. No background music.",
 }
 LEGACY_AXES = {
     "camera_framing": {
@@ -770,8 +783,37 @@ def _frame_lead(shot, roles):
 _OFF_FRAMED = {}          # seg -> 换了景别的窗口行,跑完打印一览
 _OFF_DROPPED = {}         # seg -> 因超长被迫丢掉换景别的段(超出多少字符)
 
+# ─── talking(音画同出)模式(09-21 实验固化) ─────────────────────────────
+# ★来源:exp_h3_talking.py 实证 —— 不给 reference_audio,台词写进 SHOT 描述,
+#   H3 自己开口:逐字 3/3 全对、SyncNet -0.04s、价格机制词一次过审(无 1027)。
+#   与现状链(TTS wav → reference_audio 驱动口型)共存,按片二选一:
+#   segments.json 段级 "talking": true(逐段开关),或 CLI --talking(全片,逐段标记优先)。
+# ★缺省语气 = 实验片验证过的那句;段级 "tone" 字段可覆盖,
+#   assets.json 的 "tone_map" 可按 beat(镜号/段名)再覆盖。
+DEFAULT_TALKING_TONE = "enthusiastic, fast-paced live-commerce sales tone"
 
-def build(seg, shots, cfg, en):
+
+def _talking_speech_line(seg, shot, shot_idx, tone_map):
+    """talking 段的台词句:接在该镜动作描述之后,让 H3 自己开口(音画同生,同步天然)。
+    台词取该镜 dialogue(单镜段退回段 dialogue),先 dualtext.parse 取 spoken、
+    再剥 @{锚点} 才内嵌 —— 锚点/显示标记是装配层的东西,绝不能进提示词。"""
+    dlg = (shot.get("dialogue") or "").strip()
+    if not dlg and shot_idx == 0:
+        dlg = (seg.get("dialogue") or "").strip()
+    if not dlg:
+        return ""
+    import dualtext
+    from word_align import strip_anchors      # 复用,别抄(锚点剥离有未闭合/重名硬错误)
+    spoken = strip_anchors(dualtext.parse(dlg)[1], seg["seg"])[0]
+    tone = (tone_map.get(str(shot.get("shot_id"))) or tone_map.get(seg["seg"])
+            or seg.get("tone") or DEFAULT_TALKING_TONE)
+    # 措辞逐字沿用实验版:tone 描述 + saying exactly 引号原文 + 口型跟自己语音
+    return (f' She speaks Mandarin Chinese in {tone}, '
+            f'saying exactly: "{spoken}".'
+            ' Her lip movement matches her own speech precisely.')
+
+
+def build(seg, shots, cfg, en, talking=False):
     """产出该段的六段式提示词。en = 中文→英文映射(可为空,空则原样用中文)。"""
     def E(s):
         return en.get(s, s) if s else s
@@ -932,7 +974,10 @@ def build(seg, shots, cfg, en):
         _env = _clean_scene_desc(env, no_text="Readable text (hard)" in (
             cfg.get("extra_constraints") or {}).get(seg["seg"], ""))
         defs.append(_B("subject_def_env_text", env_id=env_id, env=E(_env) or _env))
-    defs.append(_B("audio_definition"))
+    # ★talking 段没有参考音频,Audio 1 相关条款全部删掉(定义/retention/soundscape 三处同口径,
+    #   与音频唯一层三处同口径是同一个道理:留一处就是两句话打架)
+    if not talking:
+        defs.append(_B("audio_definition"))
     # ★人数硬约束。单主播="有且仅有一人";多人物片则钉住【确切的这几位】——
     #   08-13 前这里恒走单主播分支,给一条多人街采片也硬写"exactly one person",
     #   提示词自相矛盾,模型只能自由发挥。
@@ -1009,7 +1054,11 @@ def build(seg, shots, cfg, en):
         by_timeline = bool(s.get("speech_turns"))    # 口型归 speech_timeline 管,本行不发
         vl = None if by_timeline else (
             _voice_line(s, roles, cast_ids, has_cast) if has_cast else None)
-        if by_timeline:
+        if talking:
+            # ★talking(音画同出):口型/闭嘴指令一概不发(那些全是以 <Audio 1> 为前提的),
+            #   改成把台词句接在动作描述后,让 H3 自己开口(见 _talking_speech_line)。
+            line += _talking_speech_line(seg, s, i, cfg.get("tone_map") or {})
+        elif by_timeline:
             pass
         elif vl is not None:
             line += vl
@@ -1061,7 +1110,8 @@ def build(seg, shots, cfg, en):
     ret = [_B("retention_subject", v=v,
               appears=', '.join('[Shot %d]' % x for x in sorted(set(ws))))
            for v, ws in sorted(appear.items())]
-    ret.append(_B("retention_audio"))
+    if not talking:
+        ret.append(_B("retention_audio"))
 
     # ★必须和 detailed_description 用同一份剥过的动作(_clean_action),否则 summary 会
     #   把逐镜已删掉的"说话/计时器"又说一遍 —— 本项目头号病"提示词自相矛盾"的第六次。
@@ -1077,7 +1127,9 @@ def build(seg, shots, cfg, en):
     #   detailed_description 里逐镜挂到具体 Subject,summary 只需中性带过。
     if speaking:
         _bytl = any(x.get("speech_turns") for x in shots)
-        tail = ((" The on-camera characters' mouth movement follows <Audio 1> exactly, "
+        tail = ((" She speaks the quoted lines herself; her lip movement matches "
+                 "her own speech precisely.") if talking else
+                (" The on-camera characters' mouth movement follows <Audio 1> exactly, "
                  + ("as specified in the speech_timeline below." if _bytl
                     else "as specified per shot below.")) if has_cast else
                 " Her mouth movement follows <Audio 1> exactly." if has_host else "")
@@ -1100,6 +1152,12 @@ def build(seg, shots, cfg, en):
         if _ft:
             _OFF_FRAMED[seg["seg"]] = [l.strip() for l in _ft.split("\n") if l.endswith(" B")]
     _st = speech_timeline(shots, roles, cast_ids, t0, framing=bool(_ft)) if has_cast else None
+    if talking and _st:
+        # ★talking + speech_turns(轮次时间轴)目前不兼容:时间轴全是以 <Audio 1> 为前提的措辞,
+        #   talking 段没有参考音频。先响亮报警并丢弃时间轴,别静默发一份自相矛盾的提示词。
+        print(f"[h3][⚠] {seg['seg']} 是 talking 段但带 speech_turns,口型时间轴已丢弃"
+              f"(talking 段的口型由'台词句+H3自己开口'负责)", file=sys.stderr)
+        _st = None
 
     def _assemble(ft, st):
         return "\n".join([
@@ -1116,14 +1174,16 @@ def build(seg, shots, cfg, en):
         *[b + "\n" for b in body],
         *([ft, ""] if ft else []),
         *([st, ""] if st else []),
-        "overall_soundscape: " + _B("overall_soundscape"), "",
+        "overall_soundscape: " + _B("overall_soundscape_talking"
+                                    if talking else "overall_soundscape"), "",
         "non_diegetic_music: " + _B("non_diegetic_music"), "",
         # ★A模式换品牌的通用陷阱:分镜表描述的是【原品牌】产品的外观(标签/浮雕/压印/花纹),
         #   而锚图是【新品牌】的 → 两者在提示词里打架,模型照着文字改产品长相
         #   (08-09 美吉吉2:"展示皂体光泽面和标签"→皂上印出乱码字;"漩涡浮雕"→三角皂变方皂)。
         #   猜词表猜不完,改用优先级声明:外观的最终裁决权归锚图。
         "Product appearance precedence: " + _B("product_precedence"), "",
-        "Additional constraints: " + _B("additional_constraints"),
+        "Additional constraints: " + _B("additional_constraints_talking"
+                                        if talking else "additional_constraints"),
         # ★逐段追加约束:director 报出缺失后【手改提示词活不过下一次重生成】——
         #   08-11 改完 S1/S4/S10 三处,一次 h3_prompt 重跑就全冲掉了。
         #   所以补丁必须写进 assets.json 的 extra_constraints,由这里注入。
@@ -1193,6 +1253,10 @@ def main():
     ap.add_argument("--legacy-prompt", action="store_true",
                     help="★走旧的内嵌字面量提示词路径(env DAIHUO_LEGACY_PROMPT=1 同效)。"
                          "Phase 4 起固定契约块默认从 prompt_kits/h3_core.yaml 取,出问题随时切回")
+    ap.add_argument("--talking", action="store_true",
+                    help="★全片走音画同出(talking)模式:不给参考音频,台词写进 SHOT 描述让 H3 "
+                         "自己开口(09-21 exp_h3_talking 实证固化)。segments.json 段级 "
+                         "\"talking\": true/false 逐段标记优先于本开关")
     a = ap.parse_args()
     if a.legacy_prompt:
         global _LEGACY_PROMPT
@@ -1321,10 +1385,20 @@ def main():
 
     manifest, warns = {}, []
     import prompt_kit
+    # ★talking(音画同出)逐段判定:段级 "talking" 标记优先,缺省听 CLI --talking。
+    #   解析结果只进 build 的 talking 参数,不写回 seg —— 灌回 plan 时不能多出
+    #   一个 "_talking" 字段污染 segments.json。
+    talking_of = {s["seg"]: bool(s.get("talking", a.talking)) for s in segs}
+    for s in segs:
+        if talking_of[s["seg"]] and s["type"] != "mm":
+            # ★talking 段 = 口播段:要挂主播锚图、要有人开口,type 应是 mm。
+            #   i2v 段标 talking 多半是标错了(产品空镜里没有人可以"自己开口")。
+            print(f"[h3][⚠] {s['seg']} 标了 talking 但 type={s['type']}(应为 mm 口播段)"
+                  f"——不会挂主播锚图,提示词里的台词句可能无人可开口", file=sys.stderr)
     for seg in segs:
         shots = [sl.get(str(x)) or sl[str(x).rstrip("ab")] for x in seg["shots"]]
         with prompt_kit.trace() as _trace:
-            txt, pics = build(seg, shots, cfg, en)
+            txt, pics = build(seg, shots, cfg, en, talking=talking_of[seg["seg"]])
         # sidecar:本段用了哪些契约块/轴选项/槽位 hash(legacy 路径不写),给 director 闸用。
         # ★即梦腿跳过:与下方灌回循环同一判断、同一哲学 —— h3 的产物本来就不该碰即梦腿,
         #   sidecar 靠"各管各腿"与 plan_segments 的 prompts/<seg>.kit.json 自然不相撞。
@@ -1407,11 +1481,14 @@ def main():
         print("[h3][⚠] 开了 off_window_framing 但没有任何段落窗口 —— "
               "检查 profile.json 的 rig 是不是 chest_pov、operator 是否 speaks+hands_visible")
 
-    print(f"[h3] {len(segs)} 段 → {a.out_dir}/<seg>_h3.txt + images.json")
+    print(f"[h3] {len(segs)} 段 → {a.out_dir}/<seg>_h3.txt + images.json"
+          + (f"(talking 音画同出 {sum(talking_of.values())} 段)"
+             if any(talking_of.values()) else ""))
     for seg in segs:
         print(f"  {seg['seg']:4} {len(seg['shots'])}镜 {seg['duration']}s "
               f"锚图{len(manifest[seg['seg']])}张 "
-              f"{'有台词(口型跟音频)' if (seg.get('dialogue') or '').strip() else '无台词(口型闭合)'}")
+              + ("★音画同出(台词内嵌,H3自己开口)" if talking_of[seg["seg"]] else
+                 '有台词(口型跟音频)' if (seg.get('dialogue') or '').strip() else '无台词(口型闭合)'))
     if _WARN_FORMDESC:
         print(f"\n[h3][建议] 这些形态没写 form_desc,已退回'只画这张图里可见的东西'的保守描述:"
               f" {sorted(_WARN_FORMDESC)}\n  → 在 assets.json 加 form_desc: {{\"形态键\": \"这张图里到底是什么\"}} 会更准。"

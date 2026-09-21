@@ -87,6 +87,13 @@ blocks:
   overall_soundscape:
     text: "<Audio 1> is reused directly as the complete and only audio layer across the whole video. Do not generate any additional narration, voice or speech beyond <Audio 1>."
 
+  # ★出处:talking(音画同出)段的 overall_soundscape —— 09-21 exp_h3_talking 实证固化。
+  #   talking 段没有 <Audio 1>(不给参考音频,H3 自己开口),声音只由人物台词与场景
+  #   自然声构成;Audio 1 相关三处(定义/retention/soundscape)必须同口径全删全换,
+  #   留一处就是"两句话打架"(本项目头号病)。"no background music" 是实验片一次过审的措辞。
+  overall_soundscape_talking:
+    text: "The soundtrack consists solely of the host's spoken lines and the natural ambient sounds of the scene. There is no background music."
+
   # ★出处:非配乐声明。BGM 是后期的活(交付红线:FULL.mp4 永远保持无字幕无 BGM 的
   #   中性状态),模型生成层一律 None。
   non_diegetic_music:
@@ -103,6 +110,12 @@ blocks:
   #   降概率,抽帧验收仍是必经);贴字是后期的活(07-24 实证会泄漏进画面)。
   additional_constraints:
     text: "no subtitles, no captions, no on-screen text overlays, no logo, no watermark anywhere in the frame."
+
+  # ★出处:talking(音画同出)段收尾约束 —— 照旧禁字幕/贴字/水印,另加 "No background
+  #   music":音画同出没有后期铺 BGM 的环节,模型自己配乐会直接进成片(09-21 实验片
+  #   收尾句 "No background music, no subtitles, no watermark" 一次过审)。
+  additional_constraints_talking:
+    text: "no subtitles, no captions, no on-screen text overlays, no logo, no watermark anywhere in the frame. No background music."
 
 axes:
   # ★出处:无 rig 档案时的画幅/机位三分法(旧行为,rig 前的退路)。三分法猜不出

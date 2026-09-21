@@ -69,6 +69,25 @@ def fit_duration_to_audio(seg, audio_dir):
             print(f"  [⚠时长] 配音{ad:.1f}s 逼近 15s 上限,放不下会截尾——请回 plan 拆段或精简台词")
 
 
+def fit_duration_talking(seg):
+    """★talking(音画同出)段没有 wav 可量:按台词 spoken 字数估时长。
+    语速系数 ~4.2 字/秒 —— 直播带货口播实测量级(exp_h3_talking:47字台词铺满 8.9s
+    属于偏快,4.2 是留余量的估法,宁多勿少,多要的尾帧 assemble 会裁掉)。
+    数字先按读法展开再数字数(898→八百九十八 算 5 字,与真实念出来的时长对应)。
+    clamp [4,15](mmh3 原生 duration 上下限);只上调不下调,与 fit_duration_to_audio 同哲学。"""
+    dlg = (seg.get("dialogue") or "").strip()
+    if not dlg:
+        return
+    import dualtext
+    from word_align import strip_anchors, normalize    # 复用,别抄
+    spoken = strip_anchors(dualtext.parse(dlg)[1], seg["seg"])[0]
+    n = len(normalize(spoken))          # 去标点空白、数字转读法后的真实字数
+    est = max(4, min(15, math.ceil(n / 4.2)))
+    if est > seg["duration"]:
+        print(f"  [时长/talking] 台词{n}字 ≈{n/4.2:.1f}s > 规划{seg['duration']}s → 生成时长调为 {est}s")
+        seg["duration"] = est
+
+
 def submit(seg, audio_dir, model=None, res="720p"):
     model = model or JIMENG_MODEL
     if res in VIP_ONLY_RES and not model.endswith("_vip"):
@@ -83,7 +102,8 @@ def submit(seg, audio_dir, model=None, res="720p"):
         cmd = [DREAMINA, "multimodal2video"]
         for img in seg["images"]:
             cmd += ["--image", img]
-        wav = drive_wav(audio_dir, seg["seg"])
+        # ★talking(音画同出)段绝不挂音频(台词已内嵌 prompt);正常口播段才找驱动 wav
+        wav = None if seg.get("talking") else drive_wav(audio_dir, seg["seg"])
         if wav:
             cmd += ["--audio", wav]
         cmd += ["--prompt", seg["prompt"], "--duration", dur, "--ratio", "9:16",
@@ -196,7 +216,14 @@ def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
     tag = {"mm": "口播", "i2v": "image2video"}[seg["type"]]
     print(f"[{name}] {tag} {seg['duration']}s [{use_name}] 提交中", flush=True)
     try:
-        if seg["type"] == "mm":
+        if seg.get("talking"):
+            # ★talking(音画同出)段:mmh3 腿,不给音频(reference_audio 缺位,
+            #   台词已写进 prompt 让 H3 自己开口);fit_duration_to_audio 跳过——没有 wav,
+            #   时长改按台词字数估(fit_duration_talking)。
+            fit_duration_talking(seg)
+            tid = use.submit_mm(seg["images"], None, seg["prompt"],
+                                duration=seg["duration"], resolution=res, ratio="9:16")
+        elif seg["type"] == "mm":
             fit_duration_to_audio(seg, audio_dir)
             wav = drive_wav(audio_dir, name)
             tid = use.submit_mm(seg["images"], wav, seg["prompt"],
@@ -249,7 +276,11 @@ def _seg_identity(seg, use_name, model, res, audio_dir, run_name):
       key 字段清单钉死在 asset_store.clip_key 的注释里。"""
     import asset_store
     imgs = list(seg.get("images") or [])
-    if seg["type"] == "mm":
+    if seg.get("talking"):
+        # ★talking(音画同出)段:mmh3 腿、不带音频提交(见 _gen_alt)——
+        #   key 也必须不含 wav,否则提交路径与身份口径不一致,复用全程落空。
+        anchors = imgs
+    elif seg["type"] == "mm":
         anchors = imgs
         wav = drive_wav(audio_dir, seg["seg"])
         if wav:
@@ -336,8 +367,9 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
     alt = _load_backend(i2v_backend)
     mm_alt = _load_backend(mm_backend)
     if mm_backend in ("rh", "mmh3"):
-        print("[gen][⚠] 口播段走海螺h3:①提示词里【不能】有台词原文/价格词(审查只审文本,"
-              "会拒稿) ②首片请跑 qc_lipsync.py 帧级验收口型 ③钱包计费,确认用户已同意")
+        print("[gen][⚠] 口播段走海螺h3:①提示词里【不能】有台词原文/价格词(审查只审文本,会拒稿;"
+              "★talking 音画同出段除外——它故意内嵌台词、不给参考音频,且不给音频时审查无文本可拒之外的风险,见 h3_prompt 硬规①) "
+              "②首片请跑 qc_lipsync.py 帧级验收口型(talking 段跑 qc_talking.py) ③钱包计费,确认用户已同意")
     if auto_leg:
         from collections import Counter
         c = Counter(s.get("leg", "?") for s in segs)
@@ -360,6 +392,10 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
         if auto_leg and s.get("leg") in LEG_DISPATCH:
             bk, _ = LEG_DISPATCH[s["leg"]]
             return (_load_backend(bk), bk) if bk else (None, "jimeng")
+        # ★talking(音画同出)段恒走口播后端(mmh3 腿):提交形态是"多锚图+无音频+
+        #   台词内嵌 prompt",与 type 无关 —— 标了 talking 的 i2v 段也不能落即梦。
+        if s.get("talking"):
+            return (mm_alt, mm_backend)
         return (alt, i2v_backend) if s["type"] == "i2v" else (
             (mm_alt, mm_backend) if s["type"] == "mm" else (None, ""))
 
@@ -382,7 +418,9 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
         done = []
         for s in todo:
             name = s["seg"]; dst = os.path.join(clips_dir, f"{name}.mp4")
-            if s["type"] == "mm":
+            if s.get("talking"):
+                fit_duration_talking(s)   # 时长先定 key 才准(talking 段没有 wav,按字数估)
+            elif s["type"] == "mm":
                 fit_duration_to_audio(s, audio_dir)   # 时长先定 key 才准(幂等,后面再调无副作用)
             use, use_name, mdl, res_ = _dispatch(s)
             key, cmeta = _seg_identity(s, use_name, mdl, res_, audio_dir, run_name)
@@ -438,7 +476,12 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
             if dry:
                 print(f"  [dry-run] {use_name} {seg['type']}"); continue
             try:
-                if seg["type"] == "mm":
+                if seg.get("talking"):
+                    # ★talking(音画同出)段:mmh3 腿,不给音频;时长按台词字数估(同 _gen_alt)
+                    fit_duration_talking(seg)
+                    tid = use.submit_mm(seg["images"], None, seg["prompt"],
+                                        duration=seg["duration"], resolution="720p", ratio="9:16")
+                elif seg["type"] == "mm":
                     fit_duration_to_audio(seg, audio_dir)
                     wav = drive_wav(audio_dir, name)
                     tid = use.submit_mm(seg["images"], wav, seg["prompt"],
@@ -461,7 +504,8 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
             except Exception as e:
                 print(f"  [ERR {use_name} {type(e).__name__}: {str(e)[:120]}]")
             continue
-        fit_duration_to_audio(seg, audio_dir)
+        if not seg.get("talking"):            # talking 段没有 wav,时长按字数在提交分支里估
+            fit_duration_to_audio(seg, audio_dir)
         print(f"\n===== {name} {tag} {seg['duration']}s =====", flush=True)
         if dry:
             print("  [dry-run] cmd 略"); continue
