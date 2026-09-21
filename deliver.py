@@ -11,6 +11,9 @@ deliver.py — 交付模块(第8步装配之后的最后一公里,两种产物)
 
 字幕时间轴:优先吃 tts_segments 产出的 audio/seg/timing.json(逐句真实时长,精确),
 缺失时退化为"句长按字数占比摊"(粗对齐)。
+final 字幕引擎(--subs,默认 auto):plan 有 talking 段且 clips 同级 qc_talking.json
+带词级窗时改走 subs_karaoke 逐词卡拉OK渲染(治 drawtext 叠行/样式死板);
+非 talking 的片照旧 drawtext,行为零变化。
 
 ★★ assemble 用了 --trim-to-plan / --master-audio 时,deliver 必须【也带 --trim-to-plan】。
    否则视频轨按 clip 原始时长累加(后端有 4s/5s 下限,普遍比规划跨度长),
@@ -349,7 +352,25 @@ def tiezi_entries(shotlist_path, segs, seg_starts, anchors=None, total_s=None):
 WIN_FONTS = "/mnt/c/Windows/Fonts"
 
 
-def deliver_final(segs, clips_dir, audio_dir, timing, full, out, bgm=None, bgm_vol=0.15):
+def _karaoke_ok(segs, clips_dir):
+    """final 模式能否走卡拉OK字幕:plan 有 talking 段 且 clips 同级 qc_talking.json
+    里至少一段有词级窗(timing.words)。返回 (可用?, qc dict或None)。"""
+    if not any(s.get("talking") for s in segs):
+        return False, None
+    qc_path = os.path.join(os.path.dirname(os.path.abspath(clips_dir)), "qc_talking.json")
+    if not os.path.exists(qc_path):
+        return False, None
+    try:
+        qc = json.load(open(qc_path, encoding="utf-8"))
+    except Exception:
+        return False, None
+    ok = any(s.get("talking") and ((qc.get(s["seg"]) or {}).get("timing") or {}).get("words")
+             for s in segs)
+    return ok, (qc if ok else None)
+
+
+def deliver_final(segs, clips_dir, audio_dir, timing, full, out, bgm=None, bgm_vol=0.15,
+                  subs="auto"):
     if not os.path.exists(full):
         sys.exit(f"[deliver] 找不到成片 {full} — 先跑 assemble.py")
     seg_starts, t = {}, 0.0
@@ -363,6 +384,34 @@ def deliver_final(segs, clips_dir, audio_dir, timing, full, out, bgm=None, bgm_v
     entries = build_entries(segs, seg_starts, timing)
     srt = os.path.splitext(out)[0] + ".srt"
     write_srt(entries, srt)
+
+    # ── 字幕引擎选择:--subs karaoke|drawtext|auto(默认 auto:有词窗就 karaoke)。
+    #    卡拉OK路径(subs_karaoke)治 drawtext 两毛病:同一时间窗多条目叠行、样式死板;
+    #    非 talking 的片(无词窗)照旧走下面的 drawtext,行为零变化。 ──
+    kara_ok, qc = _karaoke_ok(segs, clips_dir)
+    engine = subs if subs != "auto" else ("karaoke" if kara_ok else "drawtext")
+    if engine == "karaoke" and not kara_ok:
+        print("[deliver][WARN] --subs karaoke 但无 talking 词窗(segments 无 talking 段"
+              " 或 qc_talking.json 缺 timing.words),回落 drawtext")
+        engine = "drawtext"
+
+    if engine == "karaoke":
+        import subs_karaoke
+        kara_out = out
+        if bgm:  # 先烧字幕后混 BGM(两趟 ffmpeg;BGM 混音滤镜与旧路径同款)
+            import tempfile
+            kara_out = os.path.join(tempfile.mkdtemp(prefix="deliver_kara_"), "kara.mp4")
+        subs_karaoke.run(full, segs, qc, kara_out)
+        if bgm:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", kara_out, "-stream_loop", "-1", "-i", bgm,
+                 "-filter_complex",
+                 f"[1:a]volume={bgm_vol}[b];[0:a][b]amix=inputs=2:duration=first[a]",
+                 "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-shortest",
+                 out, "-loglevel", "error"], check=True)
+        print(f"[deliver] 成品 → {out}  {dur(out):.1f}s(卡拉OK逐词字幕"
+              + (f",BGM音量{bgm_vol}" if bgm else "") + ")")
+        return
 
     style = ("FontName=Microsoft YaHei,FontSize=13,Bold=1,PrimaryColour=&HFFFFFF,"
              "OutlineColour=&H000000,Outline=1.2,MarginV=42")
@@ -410,6 +459,9 @@ if __name__ == "__main__":
     ap.add_argument("--out", default=None, help="成品输出,默认 <full>_成品.mp4")
     ap.add_argument("--bgm", default=None)
     ap.add_argument("--bgm-vol", type=float, default=0.15)
+    ap.add_argument("--subs", choices=["auto", "karaoke", "drawtext"], default="auto",
+                    help="final 字幕引擎:auto=有 talking 词窗走卡拉OK(subs_karaoke),"
+                         "否则照旧 drawtext;非 talking 的片任何取值都走 drawtext")
     a = ap.parse_args()
 
     segs = json.load(open(a.plan))
@@ -477,4 +529,4 @@ if __name__ == "__main__":
     if a.mode in ("final", "both"):
         out = a.out or (os.path.splitext(a.full)[0] + "_成品.mp4")
         deliver_final(segs, a.clips, a.audio_dir, timing, a.full, out,
-                      bgm=a.bgm, bgm_vol=a.bgm_vol)
+                      bgm=a.bgm, bgm_vol=a.bgm_vol, subs=a.subs)
