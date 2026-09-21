@@ -65,6 +65,17 @@ def dur(f):
          "-of", "csv=p=0", f]).strip())
 
 
+def _has_audio(f):
+    """clip 是否带音轨(后端把对齐好的输入音频嵌回产物,09-21;与 assemble 同口径)。"""
+    try:
+        r = subprocess.run(["ffprobe", "-v", "quiet", "-select_streams", "a:0",
+                            "-show_entries", "stream=codec_type", "-of", "csv=p=0", f],
+                           capture_output=True, text=True)
+        return "audio" in r.stdout
+    except Exception:
+        return False
+
+
 # ── 字幕条目(两种模式共用) ───────────────────────────────────────────
 def build_entries(segs, seg_starts, timing):
     """→ [(start_s, end_s, text)]。timing 命中的段逐句精确,否则按字数占比摊。"""
@@ -185,7 +196,15 @@ def deliver_draft(segs, clips_dir, audio_dir, timing, drafts_dir, name,
                                            source_timerange=jy.Timerange(0, use_us)), "主视频")
         if wav_src and os.path.exists(wav_src):
             wav = os.path.join(mat_dir, f"{nm}.wav")
-            shutil.copy(wav_src, wav)
+            # ★与 assemble 同口径(09-21):该段生成时喂过音频且 clip 带音轨 → 用 clip
+            #   内嵌音轨(后端已把音频按口型对齐位置嵌回,SyncNet ≤0.04s),原始 wav 铺段首
+            #   会把模型 lead-in 放出来。内嵌轨长不足 use_us 时剪映里自动留静。
+            if _has_audio(src):
+                subprocess.run(["ffmpeg", "-y", "-i", src, "-vn",
+                                "-t", f"{use_us / 1e6:.3f}", "-ar", "44100", "-ac", "2",
+                                wav, "-loglevel", "error"], check=True)
+            else:
+                shutil.copy(wav_src, wav)
             amat = jy.AudioMaterial(wav)
             ad = min(amat.duration, use_us)         # 配音超长截到段尾(与assemble口径一致)
             script.add_segment(jy.AudioSegment(

@@ -4,6 +4,8 @@ assemble.py — 装配模块(拼接 + 铺连续配音轨)
 
 吃 segments.json + clips/<seg>.mp4 + audio/seg/<seg>.wav → 完整成片。
 内置踩过的坑:
+  - ★段配音优先取 clip 内嵌音轨(09-21 口型漂移真相):后端已把音频按口型对齐位置
+    嵌回 clip,原始 wav 铺段首会重新放出模型 lead-in(C海参 S1 实测 +0.275s)
   - 每段配音 pad 到该段【视频时长】→ 口播段口型对齐(段音频对齐到段起点)
   - 视频先逐段归一化(scale+pad 720x1280+setsar)再 concat → 避免异源 NAL 错
   - 配音轨与画面等长 mux; 缺配音的段填静音(纯画面段)
@@ -17,6 +19,17 @@ def dur(f):
     return float(subprocess.check_output(
         ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
          "-of", "csv=p=0", f]).strip())
+
+
+def _has_audio(f):
+    """clip 是否带非静音的音轨(后端会把对齐好的输入音频嵌回产物,09-21)。"""
+    try:
+        r = subprocess.run(["ffprobe", "-v", "quiet", "-select_streams", "a:0",
+                            "-show_entries", "stream=codec_type", "-of", "csv=p=0", f],
+                           capture_output=True, text=True)
+        return "audio" in r.stdout
+    except Exception:
+        return False
 
 
 def _trim_target(s, audio_dir, master_audio=None):
@@ -73,10 +86,18 @@ def run(plan_path, clips_dir, audio_dir, out, trim_to_plan=False, master_audio=N
                         "-r", "30",
                         nv, "-loglevel", "error"], check=True)
         norm_list.append(nv)
-        # 2) 段配音 pad 到视频时长(无配音则纯静音)
+        # 2) 段配音:clip 内嵌音轨优先(★09-21 口型漂移真相)——后端生成时嘴有 lead-in,
+        #   但它把输入音频【按口型对齐好的位置】嵌回 clip(SyncNet 实测 clip 内音画差
+        #   ≤0.04s);而外部的原始 wav 铺在段首会把 lead-in 重新放出来
+        #   (C海参 S1 实测 +0.275s)。所以该段有 wav(=生成时喂过音频)且 clip 带音轨时,
+        #   直接取 clip 内嵌音轨(0→vd,与画面同锚);没喂音频的段照旧铺 wav/静音。
         na = os.path.join(work, f"{name}.wav")
         wav = os.path.join(audio_dir, f"{name}.wav") if audio_dir else ""
-        if wav and os.path.exists(wav):
+        has_embedded = wav and os.path.exists(wav) and _has_audio(clip)
+        if has_embedded:
+            subprocess.run(["ffmpeg", "-y", "-i", clip, "-vn", "-t", f"{vd}",
+                            "-ar", "44100", "-ac", "2", na, "-loglevel", "error"], check=True)
+        elif wav and os.path.exists(wav):
             subprocess.run(["ffmpeg", "-y", "-i", wav, "-af", "apad", "-t", f"{vd}",
                             "-ar", "44100", "-ac", "2", na, "-loglevel", "error"], check=True)
         else:
