@@ -20,6 +20,7 @@ clips/
 output/
 audio/
 *.mp4
+!showcase/*.mp4
 *.wav
 *.mp3
 _tts_manifest.json
