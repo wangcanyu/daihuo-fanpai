@@ -37,7 +37,8 @@ def ark_use_plan():
 
 
 def plan_key(soft=False):
-    k = os.environ.get("ARK_PLAN_KEY")
+    # ARK_PLAN_API_KEY 是 Kimi 线的叫法(它另开过一条 v1 chat 通道,10-09 收回成本地这一个出口),认它做别名
+    k = os.environ.get("ARK_PLAN_KEY") or os.environ.get("ARK_PLAN_API_KEY")
     if k and k.strip():
         return k.strip()
     p = os.path.expanduser("~/.config/daihuo-fanpai/ark_plan_key")
@@ -51,11 +52,30 @@ def plan_key(soft=False):
                        "rotate-apikey(★会立即作废旧 key,别的机器在用就别转)")
 
 
+_ROUTE_SAID = False
+
+
 def ark_endpoint():
-    """返回 (base_url, key, 走的是哪条口子) —— 反推/评委统一从这里取,别再各自硬编码。"""
+    """返回 (base_url, key, 走的是哪条口子) —— 反推/评委/C模式统一从这里取,别再各自硬编码。
+    ★全 skill 只有这一个大模型出口(10-09 定):Kimi 线曾另开一条 plan/v1 chat 通道,
+      两套用不同的环境变量名,结果"提示说在花钱、实际走套餐"这类口径打架。
+    ★每个进程第一次取口子时打印实际走的通道和模型 —— 走哪条要看得见,不靠猜。"""
+    global _ROUTE_SAID
     if ark_use_plan():
-        return ARK_PLAN_BASE, plan_key(), "agent-plan"
-    return ARK_PLATFORM_BASE, ark_key(), "platform(按量)"
+        ep = (ARK_PLAN_BASE, plan_key(), "agent-plan")
+    else:
+        ep = (ARK_PLATFORM_BASE, ark_key(), "platform(按量)")
+    if not _ROUTE_SAID:
+        import sys
+        print(f"[ark] 大模型通道 = {ep[2]} · 模型 {ARK_SEED_MODEL}"
+              + ("" if ep[2] == "agent-plan" else "  ⚠按 token 计费,花的是真钱"), file=sys.stderr)
+        _ROUTE_SAID = True
+    return ep
+
+
+def route_desc():
+    """给产物打戳用:实际通道 + 模型(别在产物里写死某个模型名)。"""
+    return {"channel": "agent-plan" if ark_use_plan() else "platform(按量)", "model": ARK_SEED_MODEL}
 
 
 def ark_key():
@@ -228,8 +248,11 @@ def fw_python():
     import importlib.util
     if importlib.util.find_spec("faster_whisper"):
         return _sys.executable
-    win = os.path.expanduser("~/AppData/Local/Programs/Python/Python313/python.exe")
-    return win if os.path.exists(win) else _sys.executable
+    for win in (os.path.expanduser("~/.venvs/fw/Scripts/python.exe"),       # 本机 Windows 侧 venv
+                os.path.expanduser("~/AppData/Local/Programs/Python/Python313/python.exe")):
+        if os.path.exists(win):
+            return win
+    return _sys.executable
 
 
 def cjk_font():
@@ -270,3 +293,15 @@ def _jy_drafts():
 
 JY_DRAFTS_DIR = _jy_drafts()
 JY_PYTHON = os.path.expanduser(os.environ.get("DAIHUO_JY_PYTHON", "~/.venv-jianying/bin/python"))
+
+
+def resolve_asset_refs(cfg):
+    """assets.json 入口统一解析 @host:/@cast:/@product: 引用(见 assets_lib.py)。没有 @ 时原样返回。"""
+    import assets_lib
+    return assets_lib.resolve_cfg(cfg)
+
+
+def load_assets(path):
+    """读 assets.json 的唯一入口:读 + 解析 @引用。下游拿到的全是普通绝对路径。"""
+    import json
+    return resolve_asset_refs(json.load(open(path, encoding="utf-8")))

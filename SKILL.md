@@ -1,6 +1,6 @@
 ---
 name: daihuo-fanpai
-description: 复刻/仿拍爆款带货短视频 —— 反推目标视频分镜,用即梦(Seedance)重新生成镜头,配音拼接成片。A模式(忠实复刻:原台词原产品) / B模式(跨类目迁移:换产品+千川本地化脚本)。触发:复刻带货视频、仿拍爆款、把这条视频用我的产品重做、抖音带货素材复刻、即梦复刻。
+description: 复刻/仿拍爆款带货短视频 —— 反推目标视频分镜,用即梦(Seedance)重新生成镜头,配音拼接成片。A模式(忠实复刻:原台词原产品) / B模式(跨类目迁移:换产品+千川本地化脚本) / C模式(没有目标视频:从例文卡库选模板直生)。触发:复刻带货视频、仿拍爆款、把这条视频用我的产品重做、抖音带货素材复刻、即梦复刻。
 tags: [复刻, 仿拍, 带货视频, 短视频, 即梦, seedance, 视频生成, 千川, 剪映草稿, 群戏]
 version: 2.0
 status: verified
@@ -14,7 +14,7 @@ updated: 2026-07-13
 
 引擎在本目录(可插拔,换实现只改单个文件):
 `seed_reverse.py` 反推 · `merge_reverse.py` 双反推合并 · **`route.py` 判片型(决定后续生成方式)** · `plan_segments.py` 规划 · `h3_prompt.py` 海螺提示词生成 · **`director.py` 约束维度检查(生成前最后一道闸)** · `seam_pick.py` 一镜到底续接挑缝 · `cut_audio.py` 原音切段(≥2s闸+timing.json) · `patch_cast.py` 群戏/多人补丁(人数硬约束) · `gen_segments.py` 生成 · `qc_assets.py` **资产入库闸(机械层+VLM层+图⇄文对账,提交前把参考图本身查一遍)** · `qc_lipsync.py` 帧级口型质检 · `qc_defects.py` 四类缺陷定量抽帧 · `grid_off.py` 多卷同网格对照 · `is_speech.py`/`voice_cmp.py` 音轨判据 · `tts_segments.py` 配音 · `assemble.py` 装配 · `deliver.py` 交付(剪映草稿/成品) · `doctor.py` 体检。
-生成后端(可插拔,契约 `submit_*()->tid` / `wait_download(tid,dst)->(size,usage)`):即梦CLI(内置) · **`mmh3_gen.py` MiniMax H3 官方规范(秘塔渠道,h3 首选)** · `ark_gen.py` 火山 · `xyq_gen.py` 小云雀 · `rh_gen.py` RunningHub海螺h3(同模型贵4.4倍,已退役)。
+生成后端(可插拔,契约 `submit_*()->tid` / `wait_download(tid,dst)->(size,usage)`):即梦CLI(内置) · **`mmh3_gen.py` MiniMax H3 官方规范(秘塔渠道,h3 首选)** · `ark_gen.py` 火山 · `xyq_gen.py` 小云雀 · `rh_gen.py` RunningHub海螺h3(同模型贵4.4倍,已退役) · `rhdh_gen.py` RunningHub 数字人(**整条口播片直通**,单主播对镜口播片型用,跳过反推/规划/TTS;30 分钟片约 ¥95,钱包计费先征得用户同意)。
 
 > **要改造/换引擎/接手本 skill?先读 `DESIGN.md`**(设计理由 + 数据契约 + 扩展点)。参考样例在 `references/`。
 
@@ -25,6 +25,36 @@ updated: 2026-07-13
   - 方法论弹药包在 `qianchuan/`(蒸馏自4套千川课):`00-INDEX`导航 · `01-选题与卖点`(三级卖点S/A/B) · `02-跨类目复制与机制`(★纪律:结构不动只换产品/卖点/数字 + 买赠堆叠 + 信任前置) · `03-句式库`(锚定/伪机制/指令式) · `04-诊断rubric与红线`(三看漏斗90分 + 合规)。
   - 操作:按 `qianchuan/LOCALIZE.md` 流程 → 向用户收事实包(品牌/主卖点/活动/价格/赠品/产地/异议点)→ 逐段改 dialogue(**默认走纪律不自由发挥**)→ 存 edits.json → `python3 localize_apply.py segments.json edits.json`(自动同步口播段 prompt 的 台词{},并对字数偏差告警)→ 给用户过目 → 继续 tts。
   - **评委(可选)**:生成后拿成片抽帧 + `04` 三看漏斗打分,不足项给整改建议。
+
+- **C·模板直生(没有目标视频)**:只有产品图 + 一句要求时,从例文卡库挑一张结构模板,让大模型直写全新 shotlist,
+  之后走 A 的下游(plan_segments → tts → h3_prompt → gen → assemble → deliver)。
+  ```
+  python3 c_gen.py --assets run/assets.json --require "做一条15-20s的早餐场景带货片" --cat 食品饮料 --out run/shotlist.json
+  ```
+  - 选卡:同品类(归一类目 `cat`)硬加分 > 时长贴近 > 已验 > 结构丰富;判废卡和非带货卡不参选。`--card <id>` 可指定。
+  - 时长只对用户目标校验(给了"15-20s"就只认它);台词里读法有歧义的地方模型会直接写 `<屏上|念法>`。
+  - 旧品名/品牌/产地/机制数字黑名单,残留即打回重写。
+
+## 例文卡库 + 资产库(10-09 从 Kimi 线适配)
+
+**例文卡库**(`punch_cards/`,卡片 JSON 不入 git;唯一入口 `cards.py`):一张卡 = 一条爆款的逐拍结构
+(beat_function / felt_intent / 台词 / 屏字 / 运镜 / 声音设计)。B 模式找参照、C 模式选模板都从这里取。
+- 状态三态:`unverified` / `verified` / `rejected`。判废的卡永不被检索/选中。
+- 类目看 `cat`(14 类归一词表),原 `category` 大半是整段商品标题,别拿它比。
+  `cards.py rules --write` 关键词粗分(免费);`cards.py classify --recheck` 大模型精分(套餐可用时跑)。
+- 检索:`card_find.py --beat 钩子 --cat 食品饮料 --hook-type 痛点供给`
+- 抽检:`card_verify.py sample --batch <日期>` 随机抽 → 人对原片判 过/废 → `card_verify.py settle <单子>`
+  (废的标 rejected;废数 ≤ 允许数才整批放行)。
+- 收卡:自产 `card_harvest.py <run> --cat …`;外部批量 `batch_reverse.py <素材目录>`(要先 `beat_tag.py --apply`)。
+
+**资产库**只有一个:`config.ASSETS_LIB`(默认 E:/jimeng/assets_lib),唯一入口 `assets_lib.py`。
+`cast/`(人物,主播也是 cast 一员)· `scene/` · `products/`(形态 + 别名 + _916 竖版)· `clips/`(只收验收片)。
+assets.json 里写引用不写路径,换机器不用改:
+`"host_anchor": "@host:西梅主播"`、`"products": {"包装袋": "@product:西梅麦片/包装袋正面"}`。
+登记:`assets_lib.py enroll-host …` / `assets_lib.py enroll-product …`;查看:`assets_lib.py list`。
+
+**大模型出口只有一个**(`config.ark_endpoint`):套餐(agent-plan)/按量由 key 决定,每个进程第一次调用时
+打印实际通道。`DAIHUO_ARK_PLAN=0` 显式退回按量(按 token 计费,先征得用户同意)。doctor 会真调一次探针。
 
 ## 第0步:体检(每次开跑前必做)
 

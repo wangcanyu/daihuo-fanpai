@@ -1120,7 +1120,7 @@ def main():
         sys.exit(f"[h3][✗] segments 引用了 shotlist 里没有的镜号 {_miss}。"
                  f"用的是 {_slp};如果这些是长镜拆出的子段(1a/1b…),"
                  f"说明 plan 没落段级分镜 —— 重跑一次 plan_segments.py 即可。")
-    cfg = json.load(open(a.assets))
+    cfg = __import__('config').load_assets(a.assets)  # 读 + 解析 @引用(唯一入口)
     if a.off_framing != "auto":
         cfg["off_window_framing"] = (a.off_framing == "on")
     cfg["_cast"] = load_cast(a.assets, cfg)

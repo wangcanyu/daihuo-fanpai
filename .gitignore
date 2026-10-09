@@ -41,3 +41,8 @@ references/h3/runninghub-*.md
 
 # 手工备份文件(改动前留的副本,不入库)
 *.bak_*
+
+# 例文卡库卡片 JSON(竞品素材攒的私有弹药,不公开发布;TAXONOMY.md / README 与工具入库)
+punch_cards/*.json
+punch_cards/_index/
+punch_cards/verify/

@@ -441,7 +441,7 @@ def completeness_check(prompt, shots, verbs=None):
 def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
          hard_max_cuts=None, by_leg=False, hero_strict=False):
     sl = _shotlist.read(shotlist_path)
-    cfg = json.load(open(assets_path))
+    cfg = __import__('config').load_assets(assets_path)  # 读 + 解析 @引用(唯一入口)
     host = cfg.get("host_anchor", "")
     host_desc = cfg.get("host_desc", "")     # 主播外形一句话(发型/上衣/气质),钉死跨段穿着一致
     prod_desc = cfg.get("product_desc", "产品")

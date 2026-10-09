@@ -70,7 +70,7 @@ def _frame_b64(video, t, w=THUMB_W):
 def collect(run):
     """把这条片的资产盘成三栏数据。"""
     sl = _shotlist.read(os.path.join(run, "shotlist.json"))["shots"]
-    cfg = json.load(open(os.path.join(run, "assets.json"))) if \
+    cfg = __import__("config").load_assets(os.path.join(run, "assets.json")) if \
         os.path.exists(os.path.join(run, "assets.json")) else {}
     idx = lib_index()
     video = next((os.path.join(run, n) for n in ("目标.mp4", "target.mp4")

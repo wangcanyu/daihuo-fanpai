@@ -57,6 +57,27 @@ def check_ark():
                 msg += " (套餐无 pro,turbo 平替)"
         except Exception:
             pass
+        # ★真调一次实际通道(10-09 实撞:套餐 key 被另一台机器轮换作废、另一把所属账号套餐过期,
+        #   doctor 只看 key 文件在不在,一直报绿;直到 C 模式/类目归一才 401)。探针 16 token,费用可忽略。
+        try:
+            import requests
+            base, key, how = ark_endpoint()
+            r = requests.post(base.rstrip("/") + "/responses",
+                              headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                              json={"model": ARK_SEED_MODEL, "max_output_tokens": 16,
+                                    "input": [{"role": "user", "content": [{"type": "input_text", "text": "OK"}]}]},
+                              proxies={"http": None, "https": None}, timeout=60)
+            if r.status_code != 200:
+                code = (r.json().get("error") or {}).get("code", "") if r.headers.get(
+                    "content-type", "").startswith("application/json") else ""
+                hint = {"AuthenticationError": "key 不存在(多半被另一台机器 rotate-apikey 作废了)",
+                        "InvalidSubscription": "该账号套餐过期/未订阅"}.get(code, r.text[:80])
+                fb = ("  → 临时退回按量:export DAIHUO_ARK_PLAN=0(按 token 计费,先征得用户同意)"
+                      if how.startswith("agent-plan") else "")
+                return (BAD, f"{how} 探针 HTTP {r.status_code}:{hint}{fb}")
+            msg += " | 探针通过"
+        except Exception as e:
+            return (WARN, f"反推key {msg} | 探针没跑成({type(e).__name__}),通道是否可用未知")
         return (OK, "反推key " + msg)
     return (BAD, "反推key缺失 → 设环境变量 ARK_API_KEY 或 ARK_PLAN_KEY(见 config.py)")
 
@@ -221,7 +242,7 @@ def main():
             blockers.append((name, msg))
     print("=" * 34)
     # 判定:反推+生成+ffmpeg 是硬门槛; 配音可降级
-    core_bad = [b for b in blockers if any(k in b[0] for k in ("ffmpeg", "即梦", "Seed"))]
+    core_bad = [b for b in blockers if any(k in b[0] for k in ("ffmpeg", "即梦", "Seed", "反推"))]  # 检查项改名后"Seed"匹配不上,反推一直不算核心(10-09 修)
     if core_bad:
         print("⛔ 核心依赖缺失,无法开跑。请先解决(凭证类需你处理,ffmpeg可自动装):")
         for n, m in core_bad:

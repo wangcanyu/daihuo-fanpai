@@ -54,6 +54,7 @@ SCHEMA = """{
    "product_role": "none(无产品) | dynamic(产品动态主体,质感不必极真) | hero_real(产品真实质感特写,如剖面/参刺/弹性,AI易翻车需真图锚定) | package_text(包装且文字需清晰,建议后期贴图)",
    "onscreen_text": "屏上所有贴字原文,无则空",
    "dialogue": "该镜对应台词(按时间对齐),无则空",
+   "audio_design": "声音设计三件套:{bgm: none|垫底|主导(BGM是内容驱动力) | sfx: 明显音效点(如ASMR/咔哒/撕拉,无则[]) | voice: 口播|旁白|无}",
    "key_colors": "画面关键物体颜色,尤其液体/产品颜色(这个字段帮你别漏爆点细节)"
  }]
 }"""
@@ -129,11 +130,23 @@ def _ark_json(content, timeout=300):
     body = {"model": ARK_SEED_MODEL, "thinking": {"type": "disabled"}, "stream": True,
             "max_output_tokens": ARK_MAX_TOKENS,
             "input": [{"role": "user", "content": content}]}
-    r = requests.post(ARK_URL, headers={"Authorization": f"Bearer {ark_endpoint()[1]}",
-                      "Content-Type": "application/json"},
-                      json=body, proxies={"http": None, "https": None},
-                      timeout=(10, timeout), stream=True)
-    r.raise_for_status()
+    # ★套餐会 429 限流 / 偶发 5xx:递增退避重试(借 Kimi 线 _ark_plan_text,90/180/270s)
+    for att in range(4):
+        try:
+            r = requests.post(ARK_URL, headers={"Authorization": f"Bearer {ark_endpoint()[1]}",
+                              "Content-Type": "application/json"},
+                              json=body, proxies={"http": None, "https": None},
+                              timeout=(10, timeout), stream=True)
+            if r.status_code == 429 or r.status_code >= 500:
+                raise RuntimeError(f"HTTP {r.status_code}: {r.text[:150]}")
+            r.raise_for_status()
+            break
+        except (RuntimeError, requests.ConnectionError, requests.Timeout) as e:
+            if att == 3:
+                raise
+            w = 90 * (att + 1)
+            print(f"  [ark {str(e)[:80]}] {w}s 后重试(第{att + 1}次)", file=sys.stderr, flush=True)
+            time.sleep(w)
     txt = ""
     for line in r.iter_lines():
         if not line:
