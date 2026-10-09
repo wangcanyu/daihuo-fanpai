@@ -255,6 +255,19 @@ def fw_python():
     return _sys.executable
 
 
+def depth_python():
+    """深度参考(depth_ref.py)用的解释器:要 torch + transformers。
+    DAIHUO_DEPTH_PYTHON > ~/.venvs/depth(10-09 建,--system-site-packages 复用系统 torch)> 当前解释器。"""
+    env = os.environ.get("DAIHUO_DEPTH_PYTHON")
+    if env:
+        return env
+    for p in (os.path.expanduser("~/.venvs/depth/bin/python"),
+              os.path.expanduser("~/.venvs/depth/Scripts/python.exe")):
+        if os.path.exists(p):
+            return p
+    return _sys.executable
+
+
 def cjk_font():
     """PIL 拼图用的中文字体:微软雅黑(Windows 或 WSL 挂载)> 文泉驿 > 报错。"""
     for p in (os.environ.get("DAIHUO_CJK_FONT"), "C:/Windows/Fonts/msyh.ttc",

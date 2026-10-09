@@ -329,6 +329,45 @@ def extract_json(txt):
     return json.loads(s[a:b + 1])
 
 
+def asr_check(video, data, workdir):
+    """★台词幻听闸(10-09 男装片血案):原片只有背景歌曲,Seed 凭画面编出 78 字带货口播,
+    下游据此判"加速片/口播片"、写了台词、配了音 —— 全是假的。旧静音闸只拦【完全静音】,
+    有 BGM 就漏。治法:Seed 说有台词 → 本机 faster-whisper 独立转写原片音轨,汉字级比对。
+    对不上只**响亮报 + 写进 _meta**,不自动删台词(ASR 在 BGM 下也会漏听,判决留给人)。"""
+    import difflib
+    import config
+    han = lambda t: re.sub(r"[^\u4e00-\u9fa5]", "", t or "")
+    claimed = han("".join(x.get("dialogue") or "" for x in data.get("shots", [])))
+    if len(claimed) < 10:
+        return None
+    wav = os.path.join(workdir, "_asr_check.wav")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", video, "-vn", "-ac", "1", "-ar", "16000", wav], check=True)
+    code = ("import sys,json\nfrom faster_whisper import WhisperModel\n"
+            "m=WhisperModel('small',device='auto',compute_type='int8')\n"
+            "segs,_=m.transcribe(sys.argv[1],language='zh',vad_filter=True,initial_prompt='以下是普通话的句子。')\n"
+            "print(json.dumps(''.join(s.text for s in segs),ensure_ascii=False))")
+    try:
+        r = subprocess.run([config.fw_python(), "-c", code, wav], capture_output=True, text=True, timeout=900)
+        heard = han(json.loads(r.stdout.strip().splitlines()[-1]))
+    except Exception as e:
+        print(f"[seed_reverse][⚠] 台词核对没跑成({type(e).__name__}),台词未经独立验证", flush=True)
+        return None
+    finally:
+        os.path.exists(wav) and os.remove(wav)
+    sim = difflib.SequenceMatcher(None, claimed, heard).ratio()
+    cover = len(heard) / len(claimed)
+    res = {"claimed_chars": len(claimed), "asr_chars": len(heard), "similarity": round(sim, 2),
+           "asr_text": heard[:200], "suspect": sim < 0.25 or cover < 0.25}
+    if res["suspect"]:
+        print(f"\n[seed_reverse][★★台词可疑] Seed 说有 {len(claimed)} 字台词,独立 ASR 只听到 {len(heard)} 字,"
+              f"相似度 {sim:.2f}。\n  ASR: {heard[:80] or '(空)'}\n"
+              "  → 可能是幻听(凭画面编台词)。先人耳听原片确认;确无人声就清空 dialogue/full_transcript,"
+              "否则下游会按口播片配音、判加速。", flush=True)
+    else:
+        print(f"[seed_reverse] 台词核对通过:相似度 {sim:.2f}(ASR {len(heard)} 字 / Seed {len(claimed)} 字)", flush=True)
+    return res
+
+
 def reverse(video, out=None, cuts=None, scene_thresh=0.15, scale=480, cut_probe=True,
             keep_audio=True, timeout=600):
     vi = video_info(video)
@@ -347,7 +386,11 @@ def reverse(video, out=None, cuts=None, scene_thresh=0.15, scale=480, cut_probe=
     data.setdefault("video_info", vi)
     data["cuts"] = cuts
     out = out or os.path.join(workdir, "shotlist.json")
-    json.dump(_stamp(data), open(out, "w"), ensure_ascii=False, indent=2)
+    _stamp(data)
+    chk = asr_check(video, data, workdir) if keep_audio else None
+    if chk:
+        data["_meta"]["dialogue_check"] = chk
+    json.dump(data, open(out, "w"), ensure_ascii=False, indent=2)
     print(f"[seed_reverse] {len(data.get('shots', []))} 镜 → {out}", flush=True)
     return data
 

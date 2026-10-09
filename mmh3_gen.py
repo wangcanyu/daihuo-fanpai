@@ -179,7 +179,17 @@ def _submit(prompt, images=(), audios=(), videos=(), duration=5,
     if not tid:
         raise RuntimeError(f"提交无 task_id: {json.dumps(j, ensure_ascii=False)[:300]}")
     rate = float(os.environ.get("DAIHUO_MMH3_PRICE", 0) or PRICE_PER_SEC.get(res, 0.09))
-    print(f"  mmh3_cost≈¥{dur * rate:.2f} ({res}, {dur}s)", flush=True)
+    # ★参考视频按秒另计、与输出同价(10-09 秘塔账单实证:task 2108545195990700032
+    #   输入 122.4 + 输出 122.4 = 244.8 积分)—— 带视频参考的段成本 ≈ 翻倍
+    vin = 0.0
+    for p in list(videos)[:3]:
+        try:
+            vin += float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                         "-of", "csv=p=0", p], capture_output=True, text=True).stdout or 0)
+        except (OSError, ValueError):
+            vin += dur
+    note = f" + 参考视频{vin:.1f}s" if vin else ""
+    print(f"  mmh3_cost≈¥{(dur + vin) * rate:.2f} ({res}, {dur}s{note})", flush=True)
     return str(tid)
 
 
@@ -189,11 +199,11 @@ def submit_i2v(image_path, prompt, duration=5, resolution="720p", ratio="9:16"):
                    resolution=resolution, ratio=ratio)
 
 
-def submit_mm(image_paths, audio_path, prompt, duration=5, resolution="720p", ratio="9:16"):
+def submit_mm(image_paths, audio_path, prompt, duration=5, resolution="720p", ratio="9:16", videos=()):
     """口播段:多锚图 + 段配音驱动口型。
     ★prompt 里【不要】写台词原文/价格词——内容安全审查只审文本(拒稿不计费但白等)。"""
     return _submit(prompt, images=list(image_paths),
-                   audios=[audio_path] if audio_path else [],
+                   audios=[audio_path] if audio_path else [], videos=list(videos),
                    duration=duration, resolution=resolution, ratio=ratio)
 
 

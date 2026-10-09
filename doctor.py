@@ -222,6 +222,18 @@ def check_wordalign():
     return OK, f"faster-whisper 就位({py});字体 {os.path.basename(font)}"
 
 
+def check_depth():
+    """深度动作参考(depth_ref.py):torch + transformers 解释器。可选 —— 只有动作为王的片子才用。"""
+    import config
+    py = config.depth_python()
+    r = sh([py, "-c", "import torch, transformers; print(torch.cuda.is_available())"])
+    if not r or r.returncode != 0:
+        return WARN, (f"{py} 里缺 torch/transformers → 深度动作参考不可用(可选)。"
+                      "装: python3 -m venv --system-site-packages ~/.venvs/depth && ~/.venvs/depth/bin/pip install transformers")
+    gpu = (r.stdout or "").strip().endswith("True")
+    return OK, f"就位({py}){'' if gpu else ' ⚠无 GPU,12s 片要跑好几分钟'};模型首次走 hf-mirror 自动下载"
+
+
 def main():
     checks = [("ffmpeg", check_ffmpeg), ("即梦CLI(生成)", check_dreamina),
               ("反推模型/计费口子", check_ark),
@@ -232,6 +244,7 @@ def main():
               ("CosyVoice(配音)", check_cosyvoice),
               ("Seed-VC(换声,可选)", check_seedvc),
               ("词级对齐/词网格(可选)", check_wordalign),
+              ("深度动作参考(可选)", check_depth),
               ("剪映草稿交付", check_jianying), ("代理", check_proxy)]
     print("===== 复刻 skill 环境体检 =====")
     blockers = []

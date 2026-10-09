@@ -86,6 +86,31 @@ def gen(prompt, out, ratio="9:16", res="2k", model="5.0", upscale=None, tries=4)
     return out
 
 
+def gen_i2i(prompt, refs, out, ratio="3:4", res="2k", model="5.0", tries=4):
+    """图生图:挂参考图(衣服实物/道具)生成。
+    ★提示词必须写明"只生成一张":即梦 5.0 有组图能力,提示词里描述"上排三张、下排三张"会被理解成
+      要 6 张独立图 —— 出完第一张就**停下等人在网页点「继续生成」**,CLI 侧看到的是永远 querying,
+      像卡死(10-09 实撞,用户在后台手点才跑完)。--generate_num 1 也拦不住,得靠提示词。"""
+    os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
+    cmd = [DREAMINA, "image2image", "--prompt", "只生成【一张】图片,不要组图、不要多张。" + prompt + TAIL,
+           "--ratio", ratio, "--resolution_type", res, "--model_version", model,
+           "--generate_num", "1", "--poll", "300"]
+    for r in refs:
+        cmd[2:2] = ["--images", os.path.abspath(r)]
+    m, txt = None, ""
+    for i in range(tries):
+        txt = _run(cmd, timeout=420)
+        m = re.search(r'"image_url"\s*:\s*"([^"]+)"', txt)
+        if m or not _transient(txt) or i == tries - 1:
+            break
+        time.sleep(10 * (i + 1))
+    if not m:
+        raise RuntimeError(f"图生图无 image_url(若 querying 不动,去网页看是不是停在「继续生成」): {txt[-200:]}")
+    size = _dl(m.group(1), out)
+    print(f"  ✓ 图生图 {os.path.basename(out)} {size//1024}KB(参考 {len(refs)} 张)")
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prompt"); ap.add_argument("--out")

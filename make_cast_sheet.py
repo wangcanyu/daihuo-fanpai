@@ -23,7 +23,10 @@ make_cast_sheet.py — 生成 3:4 人物三视图设定图并入资产库(cast s
   python3 make_cast_sheet.py --id yeshi_boy_polo --name "白绿领子小男孩" \
       --desc "8岁左右中国小男孩,短发,身穿白色底带绿色领子的Polo衫,深色短裤" \
       --alias 小男孩 --alias Polo衫小男孩 --pronoun m
-  python3 make_cast_sheet.py --batch cast_todo.json     # [{id,name,desc,aliases,pronoun}, …]
+  python3 make_cast_sheet.py --batch cast_todo.json     # [{id,name,desc,aliases,pronoun,refs?}, …]
+  python3 make_cast_sheet.py --id m1 --name 卫衣男模 --ref 衣服.png \
+      --desc "22岁左右中国年轻男生,黑色碎盖短发,上身穿参考图里这件卫衣(款式/水钻/刺绣以参考图为准)"
+      # ★--ref 走图生图:衣服/道具要还原实物时必用(文字描述会编细节)
 """
 import argparse, json, os, subprocess, sys
 
@@ -45,7 +48,7 @@ LAYOUT = ("人物三视图设定图。画面严格分成上下两部分:"
 DEFAULT_FEET = "赤脚"
 
 
-def gen_sheet(cid, name, desc, aliases, pronoun, ratio="3:4", dry=False, feet=None):
+def gen_sheet(cid, name, desc, aliases, pronoun, ratio="3:4", dry=False, feet=None, refs=None):
     """生成 sheet.png 并登记到 index.json。已存在则跳过(不重复烧额度)。"""
     d = os.path.join(LIB, "cast", cid)
     sheet = os.path.join(d, "sheet.png")
@@ -53,6 +56,22 @@ def gen_sheet(cid, name, desc, aliases, pronoun, ratio="3:4", dry=False, feet=No
         print(f"  [跳过] {cid} 已有 sheet.png")
         return sheet
     os.makedirs(d, exist_ok=True)
+    if refs:
+        # ★挂参考图(衣服/道具实物)走图生图(10-09 男装:文生图只能"描述"卫衣,多出抽绳、丢了胸口刺绣;
+        #   挂实物图后款式/水钻/刺绣全对)。desc 里写"穿参考图里这件…(以参考图为准)"。
+        if dry:
+            print(f"  [dry] {cid}: 图生图 参考={refs} | {desc}")
+            return None
+        sys.path.insert(0, HERE)
+        import make_host
+        try:
+            make_host.gen_i2i(LAYOUT.format(feet=feet or DEFAULT_FEET) + desc, refs, sheet, ratio)
+        except Exception as e:
+            print(f"  [✗] {cid} 图生图失败: {str(e)[:200]}")
+            return None
+        register(cid, name, desc, aliases, pronoun, ratio, origin="image2image 参考: " + ", ".join(refs))
+        print(f"  [✓] {cid} → {sheet}")
+        return sheet
     jobs = {sheet: LAYOUT.format(feet=feet or DEFAULT_FEET) + desc}
     jf = os.path.join(d, "_job.json")
     json.dump(jobs, open(jf, "w"), ensure_ascii=False)
@@ -99,6 +118,8 @@ def main():
     ap.add_argument("--shoes", default=None,
                     help="覆盖设定图里的足部(默认赤脚)。户外/街拍片建议显式给鞋,"
                          "例:--shoes '脚穿白色运动鞋' —— 赤脚会被模型抄进成片")
+    ap.add_argument("--ref", action="append", default=[],
+                    help="参考图(衣服/道具实物),可重复。给了就走图生图,desc 里写'穿参考图里这件…'")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     if a.batch:
@@ -113,7 +134,7 @@ def main():
     for r in rows:
         if gen_sheet(r["id"], r["name"], r["desc"], r.get("aliases") or [],
                      r.get("pronoun", "n"), a.ratio, a.dry_run,
-                     r.get("shoes") or a.shoes):
+                     r.get("shoes") or a.shoes, r.get("refs") or a.ref):
             ok += 1
     print(f"[make_cast_sheet] 完成 {ok}/{len(rows)}")
 

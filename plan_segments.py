@@ -20,6 +20,7 @@ plan_segments.py — 生成方案规划(转换/迁移阶段)
 """
 import argparse, json, math, os, re, sys
 import dualtext  # 台本层:台词投影(display/speech)的唯一出处
+import depth_ref  # 深度动作参考:判据 + 提示词分工句
 import shotlist as _shotlist  # 分镜表唯一读入口(视觉字段标点归一+台词标记校验)
 
 TAIL = "电影质感,真实生活感。保持无字幕,不要生成BGM或背景音乐,不要生成Logo,不要生成水印。"
@@ -344,7 +345,7 @@ def pick_product_anchors(shots, products, form_map=None):
     return anchors[:4], missing   # multimodal 总图 ≤9(含主播),产品图控 4 张内
 
 
-def build_kou_prompt(shots, host, prod_desc, anchors, host_desc=""):
+def build_kou_prompt(shots, host, prod_desc, anchors, host_desc="", depth=False):
     """anchors=[(label,path)..]。@图片1=主播,@图片2..N=各产品形态,提示词逐一声明。"""
     scene = shots[0].get("scene", "")
     acts = []
@@ -363,9 +364,15 @@ def build_kou_prompt(shots, host, prod_desc, anchors, host_desc=""):
     host_line = (f"@图片1是带货主播本人({host_desc}),每一个镜头都保持与@图片1完全一致的"
                  f"长相、发型和这身穿着:{host_desc}。" if host_desc else
                  "@图片1是带货主播本人,全程保持@图片1长相穿着一致。")
-    p = (f"{host_line}{prod_lines}"
+    # ★无台词的人物段(穿搭展示/旁白片)也走这里(seg_role 为拿主播锚图故意路由进 kou),
+    #   但不能写"台词{}@音频1…口型同步" —— 没有音频可挂,模型会自己编嘴型(10-09 男装片实撞)
+    speak = (f"台词{{{dialogue}}}@音频1,主播嘴巴跟随音频节奏自然说话,口型同步。" if dialogue.strip()
+             else "主播全程不说话,没有台词,嘴巴自然闭合或微笑。")
+    # ★depth=True:段挂了深度动作参考(@视频1,见 depth_ref.py)。分工句放最前 ——
+    #   "视频管动作、图片管外观,各是唯一来源";不写"不要沿用视频里的长相"这类否定句(10-09 实测压不住)
+    p = (f"{depth_ref.DEPTH_CLAUSE if depth else ''}{host_line}{prod_lines}"
          f"竖屏9:16。场景:{scene}。{body}。"
-         f"台词{{{dialogue}}}@音频1,主播嘴巴跟随音频节奏自然说话,口型同步。{TAIL}")
+         f"{speak}{TAIL}")
     return p, dialogue, images
 
 
@@ -438,8 +445,15 @@ def completeness_check(prompt, shots, verbs=None):
     return warns
 
 
+def _motion_pick(spec):
+    """--motion-ref 取值:off / suggested / S1,S3(显式点名,veto 的段仍不开)。"""
+    if spec in (None, "", "off", "suggested"):
+        return set()
+    return {x.strip() for x in spec.split(",") if x.strip()}
+
+
 def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
-         hard_max_cuts=None, by_leg=False, hero_strict=False):
+         hard_max_cuts=None, by_leg=False, hero_strict=False, motion_ref="off"):
     sl = _shotlist.read(shotlist_path)
     cfg = __import__('config').load_assets(assets_path)  # 读 + 解析 @引用(唯一入口)
     host = cfg.get("host_anchor", "")
@@ -463,9 +477,14 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
         dur = max(min_dur or 4, min(15, math.ceil(end - start)))
         sid = f"S{gi}"
         warns = []
+        # ★深度动作参考:脚本只给建议,开不开由人定(--motion-ref);成本翻倍,默认不开
+        mv, mv_why = depth_ref.suggest(shots, cfg) if role == "kou" else (None, "")
+        use_depth = (mv == "suggest" and motion_ref == "suggested") or \
+                    (mv != "veto" and role == "kou" and sid in _motion_pick(motion_ref))
         if role == "kou":
             anchors, missing = pick_product_anchors(shots, products, form_map)
-            prompt, dialogue, images = build_kou_prompt(shots, host, prod_desc, anchors, host_desc)
+            prompt, dialogue, images = build_kou_prompt(shots, host, prod_desc, anchors, host_desc,
+                                                        depth=use_depth)
             warns = completeness_check(prompt, shots, verbs)
             warns += [f"⚠锚图缺失:提示词提到'{w}'但assets无对应图,即梦会自由发挥编产品→请补图或删该形态" for w, _ in missing]
             seg = {"seg": sid, "type": "mm", "images": images,
@@ -497,6 +516,11 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
                     "dialogue": seg_dialogue,
                     "opening_3s": any(s.get("is_opening_3s") for s in shots),
                     "warns": warns})
+        if mv:
+            seg["motion_suggest"] = {"verdict": mv, "why": mv_why}
+        if use_depth:
+            seg["motion_ref"] = "depth"
+            seg["leg"] = "jimeng"        # 动作要逐帧跟:即梦跟得住,H3 只按"有哪些动作"重演(10-09 戊组)
         segments.append(seg)
         # md 卡片
         flag = " ★前3秒" if seg["opening_3s"] else ""
@@ -520,10 +544,25 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
     cost, bysec = 0.0, {}
     for s in segments:
         r = RATE.get(s.get("leg", "mmh3"), 0.11)
-        cost += s["duration"] * r
-        bysec[s.get("leg", "mmh3")] = bysec.get(s.get("leg", "mmh3"), 0) + s["duration"]
-    print("  成本估算: " + " + ".join(f"{k} {v}s×¥{RATE.get(k,0.11)}" for k, v in bysec.items())
+        k = s.get("leg", "mmh3") + ("+深度参考" if s.get("motion_ref") else "")
+        mult = 2 if s.get("motion_ref") else 1      # ★参考视频按秒另计、与输出同价(10-09 即梦/秘塔账单实证)
+        cost += s["duration"] * r * mult
+        bysec[k] = bysec.get(k, 0) + s["duration"] * mult
+    print("  成本估算: " + " + ".join(f"{k} {v}s×¥{RATE.get(k.split('+')[0],0.11)}" for k, v in bysec.items())
           + f" ≈ ¥{cost:.2f}")
+    # ★深度动作参考建议:必须原样转述给用户(理由 + 翻倍后的钱),同意后才 --motion-ref 开启
+    sug = [s for s in segments if s.get("motion_suggest")]
+    if sug:
+        print("  ── 深度动作参考(depth_ref.py)建议 ──")
+        for s in sug:
+            ms = s["motion_suggest"]
+            state = "已开启" if s.get("motion_ref") else {"veto": "否决", "optional": "可选·未开启"}.get(
+                ms["verdict"], "建议·未开启")
+            jm = s["duration"] * 14
+            print(f"  {s['seg']} [{state}] {ms['why']}  即梦 {jm}→{jm * 2} 积分")
+        if not any(s.get("motion_ref") for s in sug):
+            print("  → 转述给用户;同意后重跑加 --motion-ref suggested(或 --motion-ref S1,S3),"
+                  "再跑 depth_ref.py segments.json --video 原片")
     if nwarn:
         print(f"  ⚠️ 完备性关卡: {nwarn} 处漏动作,见 {mdp}")
     print(f"  人审稿: {mdp}")
@@ -550,6 +589,10 @@ if __name__ == "__main__":
     ap.add_argument("--hard-max-cuts", type=int, default=None,
                     help="填满模式下的镜数天花板,绝不越过(默认=--max-cuts)。即梦内部硬切5崩,"
                          "h3已验3刀;快切片开填满时必须设,否则会把9个镜头塞进一段")
+    ap.add_argument("--motion-ref", default="off",
+                    help="深度动作参考:off(默认)/ suggested(开启所有'建议'段)/ S1,S3(点名)。"
+                         "★成本翻倍,先把规划打印的建议转述给用户,同意后再开")
     a = ap.parse_args()
     out = a.out or os.path.join(os.path.dirname(a.shotlist), "segments.json")
-    plan(a.shotlist, a.assets, out, a.max_cuts, a.min_dur, a.hard_max_cuts, a.by_leg, a.hero_strict)
+    plan(a.shotlist, a.assets, out, a.max_cuts, a.min_dur, a.hard_max_cuts, a.by_leg, a.hero_strict,
+         a.motion_ref)

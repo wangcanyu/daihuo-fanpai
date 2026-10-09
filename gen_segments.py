@@ -75,6 +75,11 @@ def submit(seg, audio_dir, model=None, res="720p"):
         wav = os.path.join(audio_dir, f"{seg['seg']}.wav") if audio_dir else None
         if wav and os.path.exists(wav):
             cmd += ["--audio", wav]
+        if seg.get("video_ref"):
+            # ★深度动作参考(depth_ref.py)。⚠按参考秒数另计费,与输出同价 —— 本段积分翻倍
+            if not os.path.exists(seg["video_ref"]):
+                raise FileNotFoundError(f"{seg['seg']}: video_ref 不存在,先跑 depth_ref.py segments.json --video 原片")
+            cmd += ["--video", seg["video_ref"]]
         cmd += ["--prompt", seg["prompt"], "--duration", dur, "--ratio", "9:16",
                 "--model_version", model, "--video_resolution", res, "--poll", "0"]
     else:
@@ -167,6 +172,8 @@ def _seg_key(seg, backend, res, audio_dir, model=""):
         w = os.path.join(audio_dir, f"{seg['seg']}.wav")
         if os.path.exists(w):
             inputs.append(w)          # 口播段的驱动音轨决定口型,同图不同音是完全不同的片
+    if seg.get("video_ref"):
+        inputs.append(seg["video_ref"])   # 动作参考不同 = 不同的片
     return run_state.clip_key(seg.get("prompt"), inputs, seg.get("duration"), backend, model, res)
 
 
@@ -218,6 +225,16 @@ def _load_backend(name):
 CONCURRENT_BACKENDS = {"rh", "mmh3"}   # mmh3 并发未实测,首次批量前先探(失败不计费)
 
 
+def _vref(seg, use_name):
+    """深度动作参考在替代腿里只有 mmh3 能带(content 数组吃 video);其他腿带不了就响亮报,不静默丢。
+    ★H3 读得懂深度图但只按"有哪些动作"重演,节奏/景别不跟(10-09 戊组)—— 要逐帧跟走即梦。"""
+    if not seg.get("video_ref"):
+        return {}
+    if use_name == "mmh3":
+        return {"videos": [seg["video_ref"]]}
+    raise ValueError(f"{seg['seg']}: 挂了深度动作参考,但 {use_name} 腿不支持视频参考 —— 改走即梦或 mmh3")
+
+
 def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
     """替代后端的单段生成(提交→轮询→下载)。线程安全,供并发池调用。"""
     name = seg["seg"]; dst = os.path.join(clips_dir, f"{name}.mp4")
@@ -228,7 +245,7 @@ def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
             fit_duration_to_audio(seg, audio_dir)
             wav = os.path.join(audio_dir, f"{name}.wav") if audio_dir else None
             wav = wav if (wav and os.path.exists(wav)) else None
-            tid = use.submit_mm(seg["images"], wav, seg["prompt"],
+            tid = use.submit_mm(seg["images"], wav, seg["prompt"], **_vref(seg, use_name),
                                 duration=seg["duration"], resolution=res, ratio="9:16")
         else:
             # ★i2v 段也要把【全部】参考图送进去,不能只送 seg["anchor"] 一张
@@ -356,7 +373,7 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
                     fit_duration_to_audio(seg, audio_dir)
                     wav = os.path.join(audio_dir, f"{name}.wav") if audio_dir else None
                     wav = wav if (wav and os.path.exists(wav)) else None
-                    tid = use.submit_mm(seg["images"], wav, seg["prompt"],
+                    tid = use.submit_mm(seg["images"], wav, seg["prompt"], **_vref(seg, use_name),
                                         duration=seg["duration"], resolution="720p", ratio="9:16")
                 else:
                     tid = use.submit_i2v(_i2v_anchor(seg), seg["prompt"],
