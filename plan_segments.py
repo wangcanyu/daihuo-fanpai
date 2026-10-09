@@ -19,6 +19,8 @@ plan_segments.py — 生成方案规划(转换/迁移阶段)
 用法: python3 plan_segments.py shotlist.json assets.json --out segments.json
 """
 import argparse, json, math, os, re, sys
+import dualtext  # 台本层:台词投影(display/speech)的唯一出处
+import shotlist as _shotlist  # 分镜表唯一读入口(视觉字段标点归一+台词标记校验)
 
 TAIL = "电影质感,真实生活感。保持无字幕,不要生成BGM或背景音乐,不要生成Logo,不要生成水印。"
 MAX_DUR = 12      # 单段目标时长上限(multimodal 硬上限15,留余量)
@@ -80,7 +82,7 @@ def split_long_shots(shots, max_dur=15):
         if dur <= max_dur:
             out.append(s); continue
         n = math.ceil(dur / MAX_DUR)
-        sents = [x for x in re.split(r"(?<=[。！？!?，,])", s.get("dialogue", "") or "") if x]
+        sents = dualtext.split_units(s.get("dialogue", "") or "")   # 标记外才切,不劈开 <显示|发音>/@{锚}
         chunks = _distribute(sents, n)
         acts, cropped = _split_action(s.get("action", ""), n)
         if not cropped and any(m in (s.get("action") or "") for m in SEQ_MARKS):
@@ -119,7 +121,7 @@ def load_shotlist(shotlist_path, plan_path=None):
         side = split_shotlist_path(plan_path)
         if os.path.exists(side):
             p = side
-    return {str(s["shot_id"]): s for s in json.load(open(p))["shots"]}, p
+    return {str(s["shot_id"]): s for s in _shotlist.read(p)["shots"]}, p
 
 
 # ★镜头 → 生成腿的路由表(08-10 四方对照实测定的分工)。
@@ -350,7 +352,9 @@ def build_kou_prompt(shots, host, prod_desc, anchors, host_desc=""):
         cut = "" if i == 0 else "硬切至"
         acts.append(f"{cut}{s.get('shot_size','')}{s.get('camera','')},{s.get('action','')}")
     body = "。".join(acts)
-    dialogue = "".join((s.get("dialogue") or "") for s in shots)
+    # ★台词{} 只能放发音投影:配音轨念的是 speech,口型要对的也是它;
+    #   原文里的 <显示|发音>/@{锚点}/|| 标记绝不能进生成模型的提示词
+    dialogue = dualtext.speech("".join((s.get("dialogue") or "") for s in shots))
     # 逐图声明: @图片2是<产品desc>的<形态>
     prod_lines = "".join(
         f"@图片{i+2}是{prod_desc}的{label}(以此图为准,不要改产品外观和包装文字)。"
@@ -436,7 +440,7 @@ def completeness_check(prompt, shots, verbs=None):
 
 def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
          hard_max_cuts=None, by_leg=False, hero_strict=False):
-    sl = json.load(open(shotlist_path))
+    sl = _shotlist.read(shotlist_path)
     cfg = json.load(open(assets_path))
     host = cfg.get("host_anchor", "")
     host_desc = cfg.get("host_desc", "")     # 主播外形一句话(发型/上衣/气质),钉死跨段穿着一致

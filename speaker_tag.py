@@ -33,6 +33,7 @@ speaker_tag.py — 逐句判定「画外旁白 / 画内谁在说」(治说话人
   这是 08-21 榴莲千层的根因 —— 主要说话人是拿相机的那个人,而管线里没有他的位置。
 """
 import argparse, base64, json, os, subprocess, sys
+import shotlist as _shotlist  # 分镜表唯一读入口(视觉字段标点归一+台词标记校验)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from seed_reverse import _ark_json          # 复用同一条 Seed 管道,不另起一摊
@@ -118,13 +119,13 @@ def main():
     a = ap.parse_args()
 
     run = os.path.dirname(os.path.abspath(a.shotlist))
-    sl = json.load(open(a.shotlist))
+    sl = _shotlist.read(a.shotlist)
     shots = sl["shots"]
     spoken = [s for s in shots if (s.get("dialogue") or "").strip()]
     if not spoken:
         sys.exit("[speaker_tag] 没有带台词的镜,无需标注")
 
-    prof_txt, roles = "(没有立项档案 —— 强烈建议先跑 profile.py,否则认不出拍摄者)", []
+    prof_txt, roles = "(没有立项档案 —— 强烈建议先跑 film_profile.py,否则认不出拍摄者)", []
     if a.profile and os.path.exists(a.profile):
         pf = json.load(open(a.profile))
         op = pf.get("operator") or {}

@@ -13,6 +13,7 @@ needed_assets.py — 反推后,列出这条片要哪些资产,并**分清谁来�
 用法: python3 needed_assets.py shotlist.json [--out assets.skeleton.json]
 """
 import argparse, json, os
+import shotlist as _shotlist  # 分镜表唯一读入口(视觉字段标点归一+台词标记校验)
 from plan_segments import FORM_MAP   # 复用同一套形态映射,保证与规划一致
 from cast_plan import cluster, split_roles, lib_index, match_lib   # 人物聚类复用同一套
 
@@ -25,7 +26,7 @@ FORM_DESC = {
 
 
 def analyze(shotlist_path, out_path):
-    sl = json.load(open(shotlist_path))
+    sl = _shotlist.read(shotlist_path)
     forms, evidence = [], {}
     for s in sl.get("shots", []):
         pif = s.get("product_in_frame", "") or ""

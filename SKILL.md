@@ -125,7 +125,7 @@ python3 <engine>/doctor.py
           把这条片的结构特征和路由写清楚(与 director.py 的 RULES 同一个规矩:翻一次车加一行)。
 
 2.2 ★★立项档案(所有片必做,反推之后第一件事)
-        python3 profile.py run/目标.mp4 --shotlist run/shotlist.json --out run/profile.json
+        python3 film_profile.py run/目标.mp4 --shotlist run/shotlist.json --out run/profile.json
         → 回答"这是什么片型":机位形态(胸挂POV/手持自拍/旁观/固定)、**拍摄者是谁、出不出镜、
           说不说话**、结构化演员表、声音层次、叙事阶段。
         → ★**必须人过目**:它驱动路由、机位措辞、说话人归属和演员表,判错了下游全错。
@@ -225,6 +225,40 @@ python3 <engine>/doctor.py
 > 评委分低多半是"原片结构本就烂"(口播/多卖点/开箱)——忠实复刻分低正常;要高分走 B 模式方法论优化(单卖点+三倍画,见 qianchuan/04)。
 
 **人审闸口(第2步后)是硬要求**——生成前必让用户过 `segments.md`,尤其看完备性警告和 hero 段锚图选得对不对。这是把"垃圾进垃圾出"挡在烧积分之前。
+
+## 台本层 + 段状态账本(10-09 合 Kimi 线时立的两块地基)
+
+**台词只写一份,下游只拿投影(`dualtext.py`)。** shotlist / segments 的 `dialogue` 是唯一源头:
+字幕/贴字/草稿拿 `display()`,TTS 拿 `tts_text()`(发音 + 读音规则表),生成提示词的 `台词{}`、
+剧本先行、对账拿 `speech()`。**不许在别处再解析标记**(Kimi 线就是只给了 TTS 和字幕,
+plan 把原始标记灌进了即梦提示词)。语法(hypit Script 子集):
+
+| 写法 | 屏上 | 念 | 用途 |
+|---|---|---|---|
+| `拍<2\|两>斤` | 拍2斤 | 拍两斤 | 数字/单位/多音字定读法 |
+| `<¥59.9\|五十九块九>` | ¥59.9 | 五十九块九 | 价格口语读法 |
+| `<组件化\|>` | 组件化 | 组件化 | 钉成不可拆词组 |
+| `<\|嗯>` | (不显示) | 嗯 | 只念不上字幕 |
+| `\|\|` | 断句 | — | 字幕在这里换下一条 |
+| `@{价}…@{/价}` / `@{福利!}` | — | — | 语义区间/时刻点,`word_align` 解成帧窗,贴字绑锚跟着配音走 |
+
+读音规则(参→身、QQ弹弹→谈谈…)只有 `dualtext.PRON_RULES` 一个家;项目特有的放 `pron_fix.json`。
+分镜表一律经 `shotlist.read()`:视觉字段全角 `，；（）：` 归一成半角(剥词正则只认一套),
+台词标记写错在读入时就炸。
+
+**词级对齐(可选,零积分):** `word_align.py segments.json --audio-dir audio/seg --out anchors.json --report 对照表.md`
+—— 对照表里的 replacement 是 TTS 读错/漏读的**证据**(同音异形 = 多音字读错,不是 ASR 噪声)。
+`grid_words.py 目标.mp4 --around "一句台词"` 出带词标签的帧网格,反推/人审共用。
+
+**段状态账本(`run_state.py`,clips/manifest.json):** 生成/下载/验收/复用全记账,**复用必须显式选择**。
+```
+python3 run_state.py run/clips status
+python3 run_state.py run/clips reject S3 --note "手指粘连"   # 坏片挪进 rejected/,下次 gen 原样重摇
+python3 run_state.py run/clips accept S1,S2,S4              # 验收 → 登记进片库(<资产库>/clips)
+python3 run_state.py run/clips reuse S3 --key <key>         # 显式复用片库里已验收的同参数片
+```
+- **坏帧要重摇就 `reject`**:坏片留档进 rejected/、账本记下原因,以后能对比哪一卷是哪个问题。手删 mp4 也会重摇(已下载的段不会被打捞),只是丢了记录。
+- gen 只打捞【提交了没下到】的段;片库命中只**提示**不自动用;片库只收 accepted。
 
 ## 关键规则(写提示词/生成时)
 

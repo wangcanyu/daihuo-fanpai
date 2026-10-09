@@ -19,7 +19,7 @@ make_scene.py — 生成场景板并入资产库(全片共用同一个地方)
 """
 import argparse, json, os, subprocess, sys
 
-LIB = os.environ.get("DAIHUO_ASSETS_LIB", "/mnt/e/jimeng/assets_lib")
+LIB = __import__("config").ASSETS_LIB  # 路径只从 config 来
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # ★"空镜"和"不要人物"要分开说:只说"不要人物"模型仍会放几个远处的人;

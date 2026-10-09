@@ -25,31 +25,13 @@ DEF_REF_TEXT = "上身有堆叠感，有余量感，穿上去慵懒又宽松，�
 DEF_A_REF = f"{VDIR}/依秋（女）都可以去呃，条款看一下，你可以点开咱们那个一号链接，下面有咱们.wav"
 DEF_A_TEXT = "都可以去呃，条款看一下，你可以点开咱们那个一号链接，下面有咱们"
 
-# 读音修正:★只作用于喂CosyVoice的文本,不改字幕/台词{}(音频与字幕本就解耦,字幕后期用正字)
-# 海参场景: 几乎所有"参"读shēn,但wetext易误读cān → 全量 参→身(同音同调shēn,字数不变),
-# 用 CAN_WORDS 黑名单保护少数 cān/cēn 词。其它产品的多音字(干/行/重/长…)走 pron_fix.json 词表。
-CAN_WORDS = ["参加", "参与", "参考", "参观", "参谋", "参军", "参赛", "参展", "参数",
-             "参照", "参差", "参悟", "参禅", "参政", "参议", "参股", "参保"]
+# 读音修正:规则表与 参→身 逻辑已收进 dualtext(两条 TTS 腿共用一个家),这里只留兼容入口
+import dualtext  # 台本层:display 上字幕,tts_text(=speech+读音规则)喂 TTS
+CAN_WORDS = dualtext.CAN_WORDS
 
 
 def apply_pron_fix(text, extra=None, haishen=True):
-    # 1) 先按自定义词表替换(长词优先)
-    if extra:
-        for k in sorted(extra, key=len, reverse=True):
-            text = text.replace(k, extra[k])
-    if not haishen:
-        return text
-    # 2) 保护 cān/cēn 词
-    holders = {}
-    for i, w in enumerate(CAN_WORDS):
-        if w in text:
-            h = f"\x01{i}\x02"; holders[h] = w; text = text.replace(w, h)  # 控制字符占位,绝不能用裸数字(台词里全是价格数字)
-    # 3) 全量 参(shēn) → 身(shēn 同音同调,单字不变长度)
-    text = text.replace("参", "身")
-    # 4) 还原被保护的词
-    for h, w in holders.items():
-        text = text.replace(h, w)
-    return text
+    return dualtext.apply_pron_rules(text, extra, haishen)[0]
 
 
 import re as _re
@@ -87,12 +69,13 @@ def synth(plan_path, out_dir, voices, instruct, pron_fix_path=None, default_spk=
         for j, (spk, txt) in enumerate(subs):
             if spk not in voices:
                 spk = default_spk
-            t2 = apply_pron_fix(txt, extra, haishen)  # ★读音修正
-            if t2 != txt:
+            t2 = dualtext.tts_text(txt, extra, haishen, where=s["seg"])  # speech 投影 + 读音规则
+            disp = dualtext.display(txt, where=s["seg"])
+            if t2 != disp:
                 fixed_any.append(s["seg"])
             sid = f"{s['seg']}__{j}"
             lines.append({"id": sid, "voice": spk, "instruct": instruct, "text": t2})
-            ids.append((sid, spk, txt))  # txt=正字原文(字幕用),t2=读音修正后(只喂TTS)
+            ids.append((sid, spk, disp))  # disp=显示投影(字幕用),t2=发音投影+读音修正(只喂TTS)
         seg_subs[s["seg"]] = ids
     if fixed_any:
         print(f"[tts] 读音修正生效于段: {sorted(set(fixed_any))}")

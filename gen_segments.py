@@ -15,6 +15,8 @@ gen_segments.py — 生成消费端(吃 plan_segments 的方案 → 串行调即
 """
 import argparse, json, math, os, re, subprocess, time, urllib.request
 
+import run_state  # 段状态账本:提交/下载/验收/复用全记账,打捞与复用只认账本
+
 from config import DOWNLOAD_PROXY, jimeng_env
 DREAMINA = os.path.expanduser("~/.local/bin/dreamina")
 # 即梦档位默认 seedance2.0_vip(14积分/秒)。
@@ -158,6 +160,37 @@ def wait_download(sid, dst, tries=None, gap=15, model=None):
     return None  # 超时未完成
 
 
+def _seg_key(seg, backend, res, audio_dir, model=""):
+    """本段这次提交的参数 key(只用来提示片库里有没有【已验收】的同参数片,绝不自动复用)。"""
+    inputs = list(seg.get("images") or ([seg["anchor"]] if seg.get("anchor") else []))
+    if seg.get("type") == "mm" and audio_dir:
+        w = os.path.join(audio_dir, f"{seg['seg']}.wav")
+        if os.path.exists(w):
+            inputs.append(w)          # 口播段的驱动音轨决定口型,同图不同音是完全不同的片
+    return run_state.clip_key(seg.get("prompt"), inputs, seg.get("duration"), backend, model, res)
+
+
+def _salvage(seg, clips_dir, jm_model):
+    """账本说"提交了没下到"才打捞(只查询+下载,不重提不计费)。被 reject 的永不打捞。"""
+    a = run_state.salvageable(clips_dir, seg["seg"])
+    if not a:
+        return False
+    dst = os.path.join(clips_dir, f"{seg['seg']}.mp4")
+    print(f"[打捞] {seg['seg']} 账本里第{a['n']}次提交({a['backend']} {a['task']})没下到,先补抓", flush=True)
+    try:
+        if a["backend"] == "jimeng":
+            res = wait_download(a["task"], dst, tries=10, gap=15, model=a.get("model") or jm_model)
+        else:
+            res = _load_backend(a["backend"]).wait_download(a["task"], dst, tries=30, gap=10)
+            res = res[0] if isinstance(res, tuple) else res
+    except Exception as e:
+        res = f"{type(e).__name__}: {str(e)[:100]}"
+    ok = isinstance(res, int) and res > 0
+    run_state.record_download(clips_dir, seg["seg"], ok, note="" if ok else f"打捞失败 {res}")
+    print(f"[打捞] {'成功,零提交' if ok else f'失败({res}),转重新提交'}", flush=True)
+    return ok
+
+
 def _i2v_anchor(seg):
     """i2v 锚图兜底:anchor=null 时取 images[0](Kimi 线 09-18 实撞:mmh3 腿漏修,TypeError 整段废)。"""
     a = seg.get("anchor") or (seg.get("images") or [None])[0]
@@ -212,7 +245,9 @@ def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
         print(f"[{name}] task={tid}", flush=True)
         json.dump({"seg": name, "backend": use_name, "task": tid},
                   open(os.path.join(clips_dir, f"{name}.meta.json"), "w"))
+        run_state.record_submit(clips_dir, name, use_name, tid, key=_seg_key(seg, use_name, res, audio_dir))
         res_, usage = use.wait_download(tid, dst)
+        run_state.record_download(clips_dir, name, isinstance(res_, int))
         if isinstance(res_, int):
             money = (usage or {}).get("thirdPartyConsumeMoney")
             extra = f"  实扣¥{money}" if money else f"  usage={usage.get('total_tokens') or usage or '?'}"
@@ -266,6 +301,20 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
         return (alt, i2v_backend) if s["type"] == "i2v" else (
             (mm_alt, mm_backend) if s["type"] == "mm" else (None, ""))
 
+    # ─── 预检(账本驱动):①提交了没下到的先打捞 ②片库有同参数【已验收】片只提示不自动用 ───
+    if not dry and todo:
+        for s in list(todo):
+            if _salvage(s, clips_dir, jm):
+                todo.remove(s)
+                continue
+            _u, _un = _backend_of(s)
+            hit = run_state.store_hint(_seg_key(s, _un or "jimeng",
+                                                alt_res if _u is not None else jimeng_res, audio_dir,
+                                                "" if _u is not None else jm))
+            if hit:
+                print(f"[可复用] {s['seg']} 片库里有同参数已验收片 {hit}。要用就先 Ctrl-C,然后 "
+                      f"run_state.py {clips_dir} reuse {s['seg']} --key {hit}(默认照常重新生成)", flush=True)
+
     pool_segs = [s for s in todo
                  if _backend_of(s)[0] is not None and _backend_of(s)[1] in CONCURRENT_BACKENDS]
     if concurrency > 1 and pool_segs and dry:
@@ -315,7 +364,10 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
                 print(f"  {use_name}_task={tid}", flush=True)
                 json.dump({"seg": name, "backend": use_name, "task": tid},
                           open(os.path.join(clips_dir, f"{name}.meta.json"), "w"))
+                run_state.record_submit(clips_dir, name, use_name, tid,
+                                        key=_seg_key(seg, use_name, "720p", audio_dir))
                 res, usage = use.wait_download(tid, dst)
+                run_state.record_download(clips_dir, name, isinstance(res, int))
                 if isinstance(res, int):
                     print(f"  [downloaded/{use_name}] {name}.mp4 {res//1024}KB  usage={usage.get('total_tokens') or usage or '?'}")
                 else:
@@ -341,8 +393,11 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
         # 记 meta(便于断点补抓)
         json.dump({"seg": name, "submit_id": sid},
                   open(os.path.join(clips_dir, f"{name}.meta.json"), "w"))
+        run_state.record_submit(clips_dir, name, "jimeng", sid, model=jm_seg or jm,
+                                key=_seg_key(seg, "jimeng", jimeng_res, audio_dir, jm_seg or jm))
         try:                                    # ★单段失败不带崩整批,submit_id已存可补抓
             res = wait_download(sid, dst, model=jm)
+            run_state.record_download(clips_dir, name, isinstance(res, int) and res > 0)
             if isinstance(res, int) and res > 0:
                 print(f"  [downloaded] {name}.mp4 {res//1024}KB")
             elif res is None:

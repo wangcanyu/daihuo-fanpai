@@ -26,6 +26,7 @@ gen_jimeng_par.py — 即梦【并行】生成:先全部提交,再统一轮询�
   python3 gen_jimeng_par.py <run_dir> --only S3,S5
 """
 import argparse, json, os, subprocess, sys, time
+import run_state  # 段状态账本:只有【提交了没下到】的才续取,被 reject 的重摇
 
 
 def submit(cfg, model, res, ratio, tries=4):
@@ -88,11 +89,19 @@ def main():
     print(f"[并行] 待办 {len(todo)} 段: {todo}", flush=True)
 
     for seg in todo:                            # ① 全部提交
-        if ids.get(seg):
-            print(f"  {seg} 已有 submit_id,跳过提交", flush=True); continue
+        # ★续取只认账本(10-09 修):旧逻辑见 submit_id 就跳过提交 —— 删掉坏片想重摇,
+        #   重跑会把同一条坏片再下载回来。现在只有账本里"提交了没下到"的才续取。
+        a_ = run_state.salvageable(out, seg)
+        if a_ and a_.get("task") == ids.get(seg):
+            print(f"  {seg} 上次提交没下到(submit_id 在账本),续取不重提", flush=True); continue
+        if ids.get(seg) and seg not in run_state.load(out):   # 账本之前的在途任务:照旧续取
+            run_state.record_submit(out, seg, "jimeng", ids[seg], model=a.model)
+            print(f"  {seg} 有账本前的在途 submit_id,续取不重提", flush=True); continue
+        ids.pop(seg, None)
         sid = submit(plan[seg], a.model, a.res, a.ratio)
         if sid:
             ids[seg] = sid
+            run_state.record_submit(out, seg, "jimeng", sid, model=a.model)
             json.dump(ids, open(idf, "w", encoding="utf-8"),
                       ensure_ascii=False, indent=1)   # ★每段落盘,别攒着
             print(f"  {seg} 已提交 {sid[:12]}", flush=True)
@@ -113,10 +122,14 @@ def main():
                 c = d.get("credit_count") or 0
                 total += c
                 print(f"  ✓ {seg}  {c}积分  {os.path.getsize(dst)//1024}KB", flush=True)
-                pend.pop(seg)
+                run_state.record_download(out, seg, True)
+                pend.pop(seg); ids.pop(seg, None)
+                json.dump(ids, open(idf, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
             elif st == "fail":
                 print(f"  ✗ {seg} 失败: {str(d.get('fail_reason'))[:160]}", flush=True)
                 pend.pop(seg); ids.pop(seg, None)
+                run_state.record_download(out, seg, False, note=f"fail: {str(d.get('fail_reason'))[:80]}")
+                run_state.reject(out, seg, "生成失败(平台 fail)")
                 json.dump(ids, open(idf, "w", encoding="utf-8"),
                           ensure_ascii=False, indent=1)
         if pend:

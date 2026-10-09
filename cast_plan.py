@@ -20,9 +20,10 @@ cast_plan.py — 演职表规划(反推之后、生成之前的必经一步)
   python3 cast_plan.py shotlist.json --out cast.json    # 落盘骨架供 patch_cast 用
 """
 import argparse, json, os, re, sys
+import shotlist as _shotlist  # 分镜表唯一读入口(视觉字段标点归一+台词标记校验)
 from collections import Counter
 
-LIB = os.environ.get("DAIHUO_ASSETS_LIB", "/mnt/e/jimeng/assets_lib")
+LIB = __import__("config").ASSETS_LIB  # 路径只从 config 来
 
 # 从 person 描述里剥掉这些,剩下的才是"角色特征"
 NOISE = ("有真人", "包括", "背景路人", "围观路人", "周围路人", "背景行人", "往来的夜市行人",
@@ -173,7 +174,7 @@ def main():
     ap.add_argument("--min-shots", type=int, default=1, help="出现少于N镜的角色不单独立项")
     a = ap.parse_args()
 
-    shots = json.load(open(a.shotlist))["shots"]
+    shots = _shotlist.read(a.shotlist)["shots"]
     frags, by_shot = [], {}
     for s in shots:
         rs = split_roles(s.get("person"))

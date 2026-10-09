@@ -31,8 +31,8 @@ from plan_segments import load_shotlist   # 段级 shotlist 的唯一加载口
 # ★不止文字类:"画面叠加虚线圆圈""箭头指向""高亮"这些也是后期加的,让模型画会画进实拍层
 POST_WORDS = ("花字", "贴字", "字幕", "标注", "字样弹", "文字条", "角标",
               "叠加", "圈住", "虚线圆", "箭头", "高亮", "特效", "转场", "贴纸")
-ONSCREEN_PAT = re.compile(r"(弹出|浮现|出现|显示|画面)?[^,,。;;]*?"
-                          r"(" + "|".join(POST_WORDS) + r")[^,,。;;]*")
+ONSCREEN_PAT = re.compile(r"(弹出|浮现|出现|显示|画面)?[^,，。;；]*?"
+                          r"(" + "|".join(POST_WORDS) + r")[^,，。;；]*")
 # 第三方 IP / 品牌:一律不进提示词(《》书名号通常就是IP名)。无法穷举 → 只报警交人处理
 IP_PAT = re.compile(r"《[^》]{1,20}》")
 # ★服装统一:多日打卡 vlog 的分镜表会逐镜写"换穿白色蕾丝吊带"这类描述,而主播锚图只有一套衣服
@@ -47,18 +47,25 @@ _OUTFIT_ONLY = re.compile(r"^(同一)?(位)?(主播|她|女性|男性|人物)?\s
 # 整条丢会连动作一起丢,所以只切掉"(主播)换穿/身穿/裹着…"到下一个标点为止的那一截
 # 动词要穷举:实际语料里出现过 换穿/身穿/穿着/穿/身着/换装为/换装/裹着/裹/披着/披/戴着/戴
 _OUTFIT_FRAG = re.compile(r"(主播|她|人物)?(换装为|换装|换穿|身穿|身着|穿着|穿|裹着|裹|披着|披|戴着|戴)"
-                          r"[^,,。;;、]*(?:" + "|".join(CLOTH) + r")[^,,。;;、]*")
+                          r"[^,，。;；、]*(?:" + "|".join(CLOTH) + r")[^,，。;；、]*")
+
+
+# 从句里有这些就说明它在描述"谁在干什么",不是纯着装注
+_ACT_HINT = re.compile(r"站|坐|蹲|笑|看|望|说|喊|拿|握|捧|举|递|接|指|伸|抱|搂|走|跑|转|靠|吃|喝|点头|挥|拍|摸|试")
 
 
 def _strip_outfit(action):
     """剔掉逐镜着装描述:①括号内的着装注(保住括号外的动作) ②纯着装从句"""
-    action = re.sub(r"[((][^))]*(?:" + "|".join(CLOTH) + r")[^))]*[))]", "", action or "")
+    action = re.sub(r"[(（][^)）]*(?:" + "|".join(CLOTH) + r")[^)）]*[)）]", "", action or "")
     action = _OUTFIT_FRAG.sub("", action)          # ★长句里嵌的换装片段
     keep = []
-    for c in [x.strip() for x in re.split(r"([,,;;])", action) if x.strip()]:
-        if c in ",,;;":
+    for c in [x.strip() for x in re.split(r"([,，;；])", action) if x.strip()]:
+        if c in ",\uFF0C;\uFF1B":
             continue
-        if any(w in c for w in CLOTH) and (_OUTFIT_ONLY.match(c) or len(c) <= 14):
+        # ★短从句带衣物词 ≠ 纯着装从句:"条纹上衣女性笑着站在旁边看"是一个人+动作,
+        #   丢了画面里就少一个人(10-09 回归实撞:全角逗号归一后才切得开,旧版靠全角逗号"侥幸"保住)
+        if any(w in c for w in CLOTH) and (_OUTFIT_ONLY.match(c)
+                                           or (len(c) <= 14 and not _ACT_HINT.search(c))):
             continue
         c = c.strip(" ::、")
         if len(c) >= 3:                 # 剥完只剩"洗后效果:"这类残桩,丢掉
@@ -82,7 +89,7 @@ def _fmt_ts(sec):
 
 def _strip_onscreen(action):
     """剔掉贴字/花字类从句,保留纯动作"""
-    keep = [c.strip() for c in re.split(r"[,,;;。]", action or "") if c.strip()]
+    keep = [c.strip() for c in re.split(r"[,，;；。]", action or "") if c.strip()]
     keep = [c for c in keep if not ONSCREEN_PAT.fullmatch(c) and
             not any(w in c for w in POST_WORDS)]
     return _strip_outfit(", ".join(keep))
@@ -141,7 +148,7 @@ def translate(items):
 #   所以下面两句是**必须逐字保留**的关键:"PURELY as the identity reference" 和
 #   "never reproduce the grey backdrop, the studio lighting or the multi-view layout itself"
 #   —— 少了它们就会退化成 B 的重影,或者把影棚灰背景搬进夜市街景。
-LIB = os.environ.get("DAIHUO_ASSETS_LIB", "/mnt/e/jimeng/assets_lib")
+LIB = __import__("config").ASSETS_LIB  # 路径只从 config 来
 _PRON = {"m": ("he", "him", "his"), "f": ("she", "her", "her"), "n": ("they", "them", "their")}
 _MALE = ("大哥", "男性", "男生", "小男孩", "男孩", "光头", "寸头", "大叔", "老爸", "爸爸", "小伙")
 _FEMALE = ("女性", "女生", "女孩", "小女孩", "女摊主", "阿姨", "大姐", "妈妈", "宝妈")
@@ -1217,7 +1224,7 @@ def main():
         blob = (s.get("action") or "") + " " + (s.get("product_in_frame") or "")
         for w in APPEAR:
             if w in blob:
-                frag = [c for c in re.split(r"[,,;;。]", blob) if w in c]
+                frag = [c for c in re.split(r"[,，;；。]", blob) if w in c]
                 audit.append((sid_, w, (frag[0] if frag else blob)[:60]))
                 break
     if audit:

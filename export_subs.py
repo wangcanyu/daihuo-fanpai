@@ -12,6 +12,8 @@ export_subs.py — 导出字幕 SRT + 屏上贴字清单(后期剪映直接照�
 用法: python3 export_subs.py run/segments.json [--shotlist run/shotlist.json] [--out run/output/FULL]
 """
 import argparse, json, os, re
+import dualtext  # 台本层:台词投影(display 上屏 / speech 是念的)
+import shotlist as _shotlist  # 分镜表唯一读入口(视觉字段标点归一+台词标记校验)
 
 
 def fmt_ts(sec):
@@ -36,7 +38,7 @@ def export(seg_path, shotlist_path, out_base):
     # ── SRT:段起止来自装配顺序(逐段视频时长≈duration,按 start 归零累加) ──
     entries, clock = [], 0.0
     for s in segs:
-        d = (s.get("dialogue") or "").strip()
+        d = dualtext.display((s.get("dialogue") or "").strip(), where=s.get("seg", ""))  # 字幕只上显示投影
         dur = float(s.get("duration", 0)) or (s["end"] - s["start"])
         if d:
             sents = sentences(d)
@@ -55,7 +57,7 @@ def export(seg_path, shotlist_path, out_base):
 
     # ── 贴字清单(来自原片 shotlist 的 onscreen_text) ──
     if shotlist_path and os.path.exists(shotlist_path):
-        sl = json.load(open(shotlist_path))
+        sl = _shotlist.read(shotlist_path)
         rows = []
         for sh in sl.get("shots", []):
             ot = (sh.get("onscreen_text") or "").strip()

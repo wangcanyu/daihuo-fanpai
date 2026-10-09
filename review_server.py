@@ -67,7 +67,7 @@ def _save_upload(root, kind, key, filename, raw):
     """把页面传上来的图落到正确位置。★路径由服务端拼,页面只给 kind+key ——
     绝不拿页面传来的路径直接写盘(那等于把写任意文件的能力交给前端)。"""
     import re as _re
-    lib = os.environ.get("DAIHUO_ASSETS_LIB", "/mnt/e/jimeng/assets_lib")
+    lib = __import__("config").ASSETS_LIB  # 路径只从 config 来
     key = _re.sub(r"[^\w\u4e00-\u9fff-]", "_", str(key))[:40] or "unnamed"
     if kind == "product":
         dst = os.path.join(root, "assets", f"{key}.png")

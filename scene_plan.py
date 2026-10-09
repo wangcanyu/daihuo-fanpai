@@ -24,6 +24,7 @@ scene_plan.py — 场景资产规划(把逐镜各写各的场景收敛成几个�
   python3 scene_plan.py shotlist.json --out scene.json  # 落盘供 make_scene 用
 """
 import argparse, json, os, re
+import shotlist as _shotlist  # 分镜表唯一读入口(视觉字段标点归一+台词标记校验)
 from collections import Counter
 
 SEP = re.compile(r"[,，;；。]")     # 半角全角都要列(全项目通病,别再栽)
@@ -59,7 +60,7 @@ def main():
     ap.add_argument("--min-shots", type=int, default=2)
     a = ap.parse_args()
 
-    shots = json.load(open(a.shotlist))["shots"]
+    shots = _shotlist.read(a.shotlist)["shots"]
     heads = [scene_head(s.get("scene")) for s in shots]
     pmap = merge(heads)
     groups = {}

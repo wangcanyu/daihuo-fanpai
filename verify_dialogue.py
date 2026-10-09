@@ -25,6 +25,8 @@
   ⚠ ASR 走按量端点:agent-plan 网关不收媒体输入(直接 404)。5 秒音频约几分钱。
 """
 import argparse, difflib, json, os, re, subprocess, sys
+import dualtext  # 台本层:台词投影(display 上屏 / speech 是念的)
+import shotlist as _shotlist  # 分镜表唯一读入口(视觉字段标点归一+台词标记校验)
 
 
 def norm(s):
@@ -55,7 +57,7 @@ def main():
     ap.add_argument("--profile", default="platform_cn-beijing_accountwide")
     ap.add_argument("--out", default="dialogue_check.json")
     a = ap.parse_args()
-    sl = json.load(open(os.path.join(a.run, "shotlist.json"), encoding="utf-8"))
+    sl = _shotlist.read(os.path.join(a.run, "shotlist.json"))
     only = {x.strip() for x in a.only.split(",") if x.strip()}
     vid = a.video if os.path.isabs(a.video) else os.path.join(a.run, a.video)
     tmp = os.path.join(a.run, "_dlgchk")
@@ -65,7 +67,7 @@ def main():
         sid = str(s["shot_id"])
         if only and sid not in only:
             continue
-        ref = norm(s.get("dialogue"))
+        ref = norm(dualtext.speech(s.get("dialogue") or "", where=sid))   # 对账比的是念出来的
         if not ref:
             continue
         w = os.path.join(tmp, f"S{sid}.wav")

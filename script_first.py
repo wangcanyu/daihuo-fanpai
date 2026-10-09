@@ -44,6 +44,7 @@ assets.json 可选键:
     "voice_refs":    {"operator": "voice/op.wav", "周周": "voice/zz.wav"}  音色参考
 """
 import argparse, contextlib, json, os, re, sys, wave
+import dualtext  # 台本层:台词投影
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -69,7 +70,7 @@ def load(run):
     sl = {str(x["shot_id"]): x for x in (j("shotlist.json", {}) or {}).get("shots", [])}
     segs = j("segments.json", []) or []
     scenes = j("scene.json", {}) or {}
-    lib = os.environ.get("DAIHUO_ASSETS_LIB", "/mnt/e/jimeng/assets_lib")
+    lib = __import__("config").ASSETS_LIB  # 路径只从 config 来
     for r in cast:                      # 人设图路径
         r["sheet"] = os.path.join(lib, "cast", r.get("lib_id") or r["key"], "sheet.png")
     plate = None
@@ -102,7 +103,8 @@ def parse_script(path):
             # ★剥掉给人看的舞台提示「(说半句停住,转向周周)」—— 不剥模型会把它念出来
             txt = re.sub(r"[(（][^)）]{0,30}[)）]", "", txt).strip()
             if txt:
-                rows.append((max(a, tt), who, txt))
+                # ★剧本先行=模型自己发声:提示词里只能放发音投影,<显示|发音>/@{锚} 标记不进模型
+                rows.append((max(a, tt), who, dualtext.speech(txt, where=seg)))
         if rows:
             out[seg] = (a, rows)
     return out

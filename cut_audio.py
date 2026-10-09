@@ -7,6 +7,8 @@
 用法: python3 cut_audio.py segments.json --video 目标.mp4 --shotlist shotlist.json --out audio/seg
 """
 import argparse, json, os, subprocess
+import dualtext  # 台本层:台词投影(display 上屏 / speech 是念的)
+import shotlist as _shotlist  # 分镜表唯一读入口(视觉字段标点归一+台词标记校验)
 
 
 def main():
@@ -31,13 +33,13 @@ def main():
                         "-i", args.video, "-vn", "-ac", "1", "-ar", "24000",
                         "-af", f"apad=whole_dur={pad}", dst], check=True)
 
-    sl = json.load(open(args.shotlist))
+    sl = _shotlist.read(args.shotlist)
     shots = sl["shots"] if isinstance(sl, dict) else sl
     timing = {}
     for s in segs:
         items = []
         for sh in shots:
-            dlg = (sh.get("dialogue") or "").strip()
+            dlg = dualtext.speech((sh.get("dialogue") or "").strip())
             if not dlg:
                 continue
             if sh["start"] >= s["start"] - 0.01 and sh["end"] <= s["end"] + 0.01:

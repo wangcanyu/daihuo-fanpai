@@ -186,6 +186,21 @@ def check_proxy():
     return OK, "全链路国内直连,无需代理(代理是 Gemini 时代遗留,已退役)"
 
 
+def check_wordalign():
+    """词级对齐/词标签网格(word_align / grid_words):faster-whisper 解释器 + 中文字体。"""
+    import config
+    py = config.fw_python()
+    r = sh([py, "-c", "import faster_whisper"])
+    if not r or r.returncode != 0:
+        return WARN, (f"{py} 里没有 faster-whisper → 词级对齐/读错证据不可用(可选)。"
+                      "装: pip install faster-whisper,或设 DAIHUO_FW_PYTHON 指向装了它的解释器")
+    try:
+        font = config.cjk_font()
+    except FileNotFoundError:
+        return WARN, "faster-whisper 就位,但缺中文字体 → grid_words 拼图会失败(设 DAIHUO_CJK_FONT)"
+    return OK, f"faster-whisper 就位({py});字体 {os.path.basename(font)}"
+
+
 def main():
     checks = [("ffmpeg", check_ffmpeg), ("即梦CLI(生成)", check_dreamina),
               ("反推模型/计费口子", check_ark),
@@ -195,6 +210,7 @@ def main():
               ("RunningHub海螺(付费腿,可选)", check_rh),
               ("CosyVoice(配音)", check_cosyvoice),
               ("Seed-VC(换声,可选)", check_seedvc),
+              ("词级对齐/词网格(可选)", check_wordalign),
               ("剪映草稿交付", check_jianying), ("代理", check_proxy)]
     print("===== 复刻 skill 环境体检 =====")
     blockers = []

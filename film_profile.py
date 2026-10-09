@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-profile.py — 立项档案(反推之后、任何规划之前的"理解这条片是什么"这一步)
+film_profile.py — 立项档案(原名 profile.py:遮蔽标准库 profile,transformers 一 import 就炸,10-09 改名)(反推之后、任何规划之前的"理解这条片是什么"这一步)
 
 ★为什么必须有这一步(08-21 榴莲千层血案):
   那条片是**胸挂第一视角**,主要说话人是**不出镜的拍摄者**。
@@ -21,10 +21,11 @@ profile.py — 立项档案(反推之后、任何规划之前的"理解这条片
   换个片就不灵。让 VLM 直接给结构化列表,把这个依赖砍掉。
 
 用法:
-  python3 profile.py 目标.mp4 --shotlist shotlist.json [--out profile.json]
+  python3 film_profile.py 目标.mp4 --shotlist shotlist.json [--out profile.json]
 产物: profile.json + 人审对照表打印
 """
 import argparse, base64, json, os, subprocess, sys
+import shotlist as _shotlist  # 分镜表唯一读入口(视觉字段标点归一+台词标记校验)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from seed_reverse import _ark_json          # 复用同一条 Seed 管道
@@ -112,7 +113,7 @@ def main():
     a = ap.parse_args()
 
     run = os.path.dirname(os.path.abspath(a.shotlist))
-    shots = json.load(open(a.shotlist))["shots"]
+    shots = _shotlist.read(a.shotlist)["shots"]
     rows = []
     for s in shots:
         rows.append(f"镜{s['shot_id']} [{float(s['start']):.1f}-{float(s['end']):.1f}s] "

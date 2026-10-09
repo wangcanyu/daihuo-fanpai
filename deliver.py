@@ -28,6 +28,8 @@ draft 模式若当前解释器缺该库,自动用 DAIHUO_JY_PYTHON(默认 ~/.ven
   python3 deliver.py segments.json --mode final --full output/FULL.mp4 [--bgm x.mp3]
 """
 import argparse, json, os, re, shutil, subprocess, sys
+import dualtext  # 台本层:台词投影(display 上屏 / speech 是念的)
+import shotlist as _shotlist  # 分镜表唯一读入口(视觉字段标点归一+台词标记校验)
 
 import config
 from export_subs import sentences, fmt_ts  # 复用切句/时间码
@@ -81,7 +83,7 @@ def build_entries(segs, seg_starts, timing):
         if lines:  # 精确路径:逐句真实时长
             off = 0.0
             for ln in lines:
-                sents = sentences(ln["text"])
+                sents = sentences(dualtext.display(ln["text"]))   # 旧 timing 可能带标记,兜底取显示投影
                 total = sum(len(x) for x in sents) or 1
                 s0 = t0 + off
                 for x in sents:
@@ -90,7 +92,7 @@ def build_entries(segs, seg_starts, timing):
                     s0 += d
                 off += ln["dur"]
         else:  # 粗对齐兜底
-            d = (s.get("dialogue") or "").strip()
+            d = dualtext.display((s.get("dialogue") or "").strip(), where=name)
             if not d:
                 continue
             sents = sentences(d)
@@ -203,7 +205,7 @@ def deliver_draft(segs, clips_dir, audio_dir, timing, drafts_dir, name,
         script.append_track(TrackSpec(TrackType.text, "贴字参考"))
         n = 0
         total_s = t_us / 1e6
-        for sh in json.load(open(shotlist_path)).get("shots", []):
+        for sh in _shotlist.read(shotlist_path).get("shots", []):
             ot = (sh.get("onscreen_text") or "").strip()
             a, b = float(sh.get("start", 0)), float(sh.get("end", 0))
             if not ot or ot in ("无", "none") or a >= total_s:

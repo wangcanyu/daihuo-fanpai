@@ -27,7 +27,7 @@ make_cast_sheet.py — 生成 3:4 人物三视图设定图并入资产库(cast s
 """
 import argparse, json, os, subprocess, sys
 
-LIB = os.environ.get("DAIHUO_ASSETS_LIB", "/mnt/e/jimeng/assets_lib")
+LIB = __import__("config").ASSETS_LIB  # 路径只从 config 来
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # ★逐字保留:这是 C2 那版实证有效的版式描述。

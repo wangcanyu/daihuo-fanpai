@@ -18,7 +18,7 @@ apply_board.py — 把审片台导出的决策写回 cast.json / 资产库
 """
 import argparse, json, os, sys
 
-LIB = os.environ.get("DAIHUO_ASSETS_LIB", "/mnt/e/jimeng/assets_lib")
+LIB = __import__("config").ASSETS_LIB  # 路径只从 config 来
 
 
 def apply_decisions(run, d, dry=False):

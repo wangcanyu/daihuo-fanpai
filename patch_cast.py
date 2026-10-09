@@ -25,6 +25,7 @@ cast.json 格式:
 - 台词说话人分配若靠不住,用帧级口型QC(qc_lipsync.py)裁决,别信模型自由转写。
 """
 import argparse, json, re
+import shotlist as _shotlist  # 分镜表唯一读入口(视觉字段标点归一+台词标记校验)
 
 
 def detect_cast(seg, shots, roles, group_aliases):
@@ -57,7 +58,7 @@ def main():
     cast = json.load(open(args.cast))
     roles = cast["roles"]
     by_key = {r["key"]: r for r in roles}
-    sl = json.load(open(args.shotlist))
+    sl = _shotlist.read(args.shotlist)
     shots = sl["shots"] if isinstance(sl, dict) else sl
 
     for seg in segs:

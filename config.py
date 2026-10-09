@@ -200,6 +200,48 @@ def jimeng_env():
 
 COSYVOICE_HOME = os.environ.get("COSYVOICE_HOME", os.path.expanduser("~/CosyVoice"))
 
+# ── 本机工具路径:全部收在这里,按平台判断,脚本里不许再写死盘符/用户名(10-09)──
+#   Kimi 线教训:C:/Users/gao/... 和 D:/复刻测试/... 散落在 5 个文件,换台机器全炸;
+#   WSL 上 'D:/x' 还会在当前目录建一个叫 "D:" 的文件夹。
+import sys as _sys
+
+
+def _assets_lib():
+    """资产库根(人设图/场景板/产品形态/验收片库 clips/)。DAIHUO_ASSETS_LIB > 本机 E 盘(WSL/Windows 两种写法)。"""
+    env = os.environ.get("DAIHUO_ASSETS_LIB")
+    if env:
+        return env
+    for p in ("/mnt/e/jimeng/assets_lib", "E:/jimeng/assets_lib"):
+        if os.path.isdir(p):
+            return p
+    return os.path.expanduser("~/daihuo_assets_lib")
+
+
+ASSETS_LIB = _assets_lib()
+
+
+def fw_python():
+    """词级转写(faster-whisper)用的解释器。DAIHUO_FW_PYTHON > 当前解释器(装了就用) > Windows 默认。"""
+    env = os.environ.get("DAIHUO_FW_PYTHON")
+    if env:
+        return env
+    import importlib.util
+    if importlib.util.find_spec("faster_whisper"):
+        return _sys.executable
+    win = os.path.expanduser("~/AppData/Local/Programs/Python/Python313/python.exe")
+    return win if os.path.exists(win) else _sys.executable
+
+
+def cjk_font():
+    """PIL 拼图用的中文字体:微软雅黑(Windows 或 WSL 挂载)> 文泉驿 > 报错。"""
+    for p in (os.environ.get("DAIHUO_CJK_FONT"), "C:/Windows/Fonts/msyh.ttc",
+              "/mnt/c/Windows/Fonts/msyh.ttc", "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+              "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"):
+        if p and os.path.exists(p):
+            return p
+    raise FileNotFoundError("找不到中文字体:设 DAIHUO_CJK_FONT 指向一个 .ttc/.ttf")
+
+
 # 反推/评委用的 Seed 模型:公共模型名直调(实测可用),不再依赖私人 endpoint ID(ep-xxx)。
 # 换模型/换 endpoint 用环境变量覆盖,不改代码。
 # ★默认模型必须跟着【计费口子】走 —— 套餐里没有 pro,只有 turbo。

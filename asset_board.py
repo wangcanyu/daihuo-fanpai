@@ -26,6 +26,7 @@ asset_board.py — 资产审片台:起一次性本地服务让人审,提交即�
   python3 asset_board.py --run <run目录> --html-only board.html   # 只出静态页(存档用)
 """
 import argparse, base64, io, json, os, subprocess, sys, html
+import shotlist as _shotlist  # 分镜表唯一读入口(视觉字段标点归一+台词标记校验)
 
 # ★行缓冲:nohup/管道下 print 会被块缓冲,审核页 URL 就看不见了(08-21 实撞)
 try:
@@ -36,7 +37,7 @@ except Exception:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cast_plan import cluster, split_roles, lib_index, match_lib
 
-LIB = os.environ.get("DAIHUO_ASSETS_LIB", "/mnt/e/jimeng/assets_lib")
+LIB = __import__("config").ASSETS_LIB  # 路径只从 config 来
 THUMB_W = 200
 
 
@@ -68,7 +69,7 @@ def _frame_b64(video, t, w=THUMB_W):
 
 def collect(run):
     """把这条片的资产盘成三栏数据。"""
-    sl = json.load(open(os.path.join(run, "shotlist.json")))["shots"]
+    sl = _shotlist.read(os.path.join(run, "shotlist.json"))["shots"]
     cfg = json.load(open(os.path.join(run, "assets.json"))) if \
         os.path.exists(os.path.join(run, "assets.json")) else {}
     idx = lib_index()

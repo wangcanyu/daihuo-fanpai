@@ -17,6 +17,7 @@ director.py — 提示词「约束维度」检查表(生成前的最后一道闸
   python3 director.py segments.json --prompts-dir prompts   # 检查 h3 六段式提示词
 """
 import argparse, json, os, re, sys
+import dualtext  # 台本层:台词投影(display 上屏 / speech 是念的)
 
 from plan_segments import load_shotlist   # 段级 shotlist 的唯一加载口
 
@@ -408,7 +409,9 @@ def check_segment(seg, shots, prompt, is_h3=False, ctx=None):
             if not prod:
                 out.append((r, "本段提到产品,但参考图里只有主播/场景,没有任何产品图"))
         elif r.get("check_promo"):                # 促销话术 ⇄ 有没有真活动
-            txt = (seg.get("dialogue") or "") + " ".join(
+            _d = seg.get("dialogue") or ""
+            # 屏上写的和嘴里念的都算话术:两个投影都查
+            txt = dualtext.display(_d) + " " + dualtext.speech(_d) + " " + " ".join(
                 (sh.get("onscreen_text") or "") for sh in shots)
             hit = [k for k in PROMO_KW if k in txt]
             if _hit_promo_soft(txt):

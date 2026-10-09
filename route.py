@@ -149,7 +149,7 @@ def main():
         if not k.startswith("_"):
             print(f"  {k:36} {v}")
     if f["_profile_missing"]:
-        print("\n[⚠] 没有 profile.json —— 判型主要依据缺失,先跑 profile.py")
+        print("\n[⚠] 没有 profile.json —— 判型主要依据缺失,先跑 film_profile.py")
     for t in cast:
         show(t, "人物轴(决定踩什么坑、选哪条腿)")
     for t in spk:

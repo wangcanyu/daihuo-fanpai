@@ -19,6 +19,8 @@
   qc_frames/判读说明书.md        给判读代理的完整指令(角色外形表自行补充)
 """
 import argparse, json, os, subprocess
+import dualtext  # 台本层:台词投影(display 上屏 / speech 是念的)
+import shotlist as _shotlist  # 分镜表唯一读入口(视觉字段标点归一+台词标记校验)
 
 
 def grab(video, t, dst):
@@ -39,7 +41,7 @@ def main():
 
     segs = json.load(open(args.plan))
     only = set(args.only.split(",")) if args.only else None
-    sl = json.load(open(args.shotlist))
+    sl = _shotlist.read(args.shotlist)
     shots = sl["shots"] if isinstance(sl, dict) else sl
     os.makedirs(args.out, exist_ok=True)
 
@@ -51,7 +53,7 @@ def main():
         if not os.path.exists(clip):
             continue
         for sh in shots:
-            dlg = (sh.get("dialogue") or "").strip()
+            dlg = dualtext.speech((sh.get("dialogue") or "").strip())
             if not dlg:
                 continue
             if not (sh["start"] >= s["start"] - 0.01 and sh["end"] <= s["end"] + 0.01):
