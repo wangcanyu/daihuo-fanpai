@@ -31,6 +31,7 @@ import argparse, json, os, re, shutil, subprocess, sys
 
 import config
 from export_subs import sentences, fmt_ts  # 复用切句/时间码
+from assemble import fit_filter  # 画幅归一化同一口径
 
 
 # ── 路径:WSL ↔ Windows ─────────────────────────────────────────────
@@ -41,7 +42,7 @@ def to_wsl(p):
       Windows 原生 Python 上把 'D:/...' 转成 '/mnt/d/...' 会指向不存在的路径,
       剪映草稿模式必挂。没有 /mnt 就说明不是 WSL,盘符路径本来就是对的。"""
     m = re.match(r"^([A-Za-z]):[\\/](.*)$", p)
-    if m and os.path.isdir("/mnt"):
+    if m and os.path.isdir(f"/mnt/{m.group(1).lower()}"):   # 查到具体盘符(Kimi 线:只查 /mnt 不够)
         return f"/mnt/{m.group(1).lower()}/" + m.group(2).replace("\\", "/")
     return p
 
@@ -74,6 +75,9 @@ def build_entries(segs, seg_starts, timing):
             continue
         t0, vd = seg_starts[name]  # 段起点/段视频时长(秒)
         lines = (timing or {}).get(name)
+        # ★timing 两种形态都收:tts_segments 产逐句 list,CosyVoice 单段产单 dict(Kimi 线 09-16 实撞)
+        if isinstance(lines, dict):
+            lines = [lines]
         if lines:  # 精确路径:逐句真实时长
             off = 0.0
             for ln in lines:
@@ -149,7 +153,15 @@ def deliver_draft(segs, clips_dir, audio_dir, timing, drafts_dir, name,
         if not os.path.exists(src):
             missing.append(nm); continue
         clip = os.path.join(mat_dir, f"{nm}.mp4")
-        shutil.copy(src, clip)
+        # ★草稿素材也归一化到画布比例 + CFR(与 assemble 同一 fit_filter 口径,
+        #   否则 4:7 素材在 9:16 画布上留黑边;画幅大错时补边告警不裁)
+        vf, warn = fit_filter(src, _w, _h)
+        if warn:
+            print(f"[deliver][⚠] {nm}: {warn}")
+        subprocess.run(["ffmpeg", "-y", "-i", src, "-an",
+                        "-c:v", "libx264", "-crf", "20", "-preset", "veryfast",
+                        "-pix_fmt", "yuv420p", "-vf", vf, "-r", "30", clip,
+                        "-loglevel", "error"], check=True)
         mat = jy.VideoMaterial(clip)
         # ★与 assemble --trim-to-plan 对齐:各后端产物都比规划跨度长(即梦下限4s/海螺5s),
         #   不裁则视频轨被撑长、而字幕轨是按原片时间轴排的 → 两轨对不上(08-09 李时珍片:
@@ -159,9 +171,14 @@ def deliver_draft(segs, clips_dir, audio_dir, timing, drafts_dir, name,
             span_us = int((float(s.get("end", 0)) - float(s.get("start", 0))) * 1e6)
             if 0 < span_us < use_us:
                 use_us = span_us
+        wav_src = os.path.join(audio_dir, f"{nm}.wav") if audio_dir else ""
+        # ★逐段配音口径与 assemble._trim_target 对齐:TTS 配音比原片跨度长时是【视频段加长
+        #   迁就配音】max(span,wav),不是剪配音(Kimi 线 09-18 实撞:草稿 14.8s 剪断品名,
+        #   成片 19.5s 才是全的;A 模式 wav≈span 从不暴露)。
+        if trim_to_plan and wav_src and os.path.exists(wav_src):
+            use_us = min(max(use_us, int(dur(wav_src) * 1e6)), mat.duration)
         script.add_segment(jy.VideoSegment(mat, jy.Timerange(t_us, use_us),
                                            source_timerange=jy.Timerange(0, use_us)), "主视频")
-        wav_src = os.path.join(audio_dir, f"{nm}.wav") if audio_dir else ""
         if wav_src and os.path.exists(wav_src):
             wav = os.path.join(mat_dir, f"{nm}.wav")
             shutil.copy(wav_src, wav)
@@ -277,6 +294,9 @@ if __name__ == "__main__":
         if not a.drafts_dir:
             sys.exit("[deliver] draft 模式需要 --drafts-dir 或环境变量 DAIHUO_JY_DRAFTS")
         name = a.name or os.path.basename(os.path.dirname(os.path.abspath(a.plan))) or "daihuo_fanpai"
+        if not a.name and name in ("run", "output"):
+            # plan 在 <项目>/run/segments.json 时草稿全撞名「run」(Kimi 线 09-10 实撞),往上取一级项目名
+            name = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(a.plan)))) or name
         deliver_draft(segs, a.clips, a.audio_dir, timing, a.drafts_dir, name,
                       trim_to_plan=a.trim_to_plan, size=a.size,
                       shotlist_path=a.shotlist, replace=a.replace)

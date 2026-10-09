@@ -92,7 +92,20 @@ def main():
     ap.add_argument("--skip-head", type=float, default=0.2, help="丢掉 B 开头多少秒的起步抖动")
     ap.add_argument("--out", default=None, help="给了就直接按最佳切点拼出来")
     ap.add_argument("--xfade", type=float, default=0.0, help="微溶接时长(0=硬切)")
+    ap.add_argument("--parent-of-b", default=None,
+                    help="B 段的首帧来源 clip(续接链跟踪):记进 B 同目录 seam_chain.json,"
+                         "距上次回锚 >2 代响亮警告")
     a = ap.parse_args()
+
+    # ★续接链长跟踪(Kimi 线 09-05):链式续接每代都把上一代误差当首帧继承,漂移在后段累积爆发
+    if a.parent_of_b:
+        chain_p = os.path.join(os.path.dirname(os.path.abspath(a.seg_b)), "seam_chain.json")
+        chain = json.load(open(chain_p, encoding="utf-8")) if os.path.exists(chain_p) else {}
+        depth = chain.get(os.path.basename(a.parent_of_b), {}).get("depth", 1) + 1
+        chain[os.path.basename(a.seg_b)] = {"parent": os.path.basename(a.parent_of_b), "depth": depth}
+        json.dump(chain, open(chain_p, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        print(f"[seam] 链长跟踪:{os.path.basename(a.seg_b)} 距上次回锚 {depth} 代"
+              + (" —— ★★超过 2 代!停下,从锚图重开一代再续" if depth > 2 else "(≤2 代,安全)"))
 
     rows = pick(a.seg_a, a.seg_b, a.a_start, a.b_start, a.overlap, skip_head=a.skip_head)
     if not rows:

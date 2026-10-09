@@ -80,7 +80,11 @@ def submit(seg, audio_dir, model=None, res="720p"):
         #   出来就是 960x960,装配硬塞进 1080x1920 只能裁或加黑边,整段废,
         #   而脚本层面一声不吭(08-11:9 段全中,是用户看即梦后台才发现的)。
         #   约定:fit_anchor.py 产出的同名 *_916.png 若在,一律优先用。
-        anchor = seg["anchor"]
+        # ★anchor 兜底:规划器只填了 images 没填 anchor 时取首图,否则 re.sub 吃 None 整段崩
+        #   (Kimi 线 09-16 实撞:B模式 S1/S4/S6 anchor=null)
+        anchor = seg.get("anchor") or (seg.get("images") or [None])[0]
+        if not anchor:
+            raise ValueError(f"{seg.get('seg')}: i2v 段缺 anchor/images,无法提交")
         cand = re.sub(r"\.(png|jpg|jpeg)$", "_916.png", anchor, flags=re.I)
         if cand != anchor and os.path.exists(cand):
             anchor = cand
@@ -154,6 +158,14 @@ def wait_download(sid, dst, tries=None, gap=15, model=None):
     return None  # 超时未完成
 
 
+def _i2v_anchor(seg):
+    """i2v 锚图兜底:anchor=null 时取 images[0](Kimi 线 09-18 实撞:mmh3 腿漏修,TypeError 整段废)。"""
+    a = seg.get("anchor") or (seg.get("images") or [None])[0]
+    if not a:
+        raise ValueError(f"{seg.get('seg')}: i2v 段缺 anchor/images,无法提交")
+    return a
+
+
 def _load_backend(name):
     if name == "ark":
         import ark_gen as m; return m         # 火山Ark(i2v/t2v,按token计费,省CLI积分)
@@ -195,7 +207,7 @@ def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
                 tid = use.submit_mm(_imgs, None, seg["prompt"],
                                     duration=seg["duration"], resolution=res, ratio="9:16")
             else:
-                tid = use.submit_i2v(seg["anchor"], seg["prompt"],
+                tid = use.submit_i2v(_i2v_anchor(seg), seg["prompt"],
                                      duration=seg["duration"], resolution=res, ratio="9:16")
         print(f"[{name}] task={tid}", flush=True)
         json.dump({"seg": name, "backend": use_name, "task": tid},
@@ -283,8 +295,9 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
         name = seg["seg"]; dst = os.path.join(clips_dir, f"{name}.mp4")
         tag = {"mm": "口播", "i2v": "image2video"}[seg["type"]]
         # ★替代后端: i2v 段可走 Ark/小云雀/RH; mm 口播段目前只有即梦和 RH 海螺能对口型
-        use = alt if seg["type"] == "i2v" else (mm_alt if seg["type"] == "mm" else None)
-        use_name = i2v_backend if seg["type"] == "i2v" else mm_backend
+        # ★串行路也要过 _backend_of(Kimi 线 08-23 实撞):--auto-leg 之前只对并发池生效,
+        #   concurrency=1 时全落即梦,派发表白打。
+        use, use_name = _backend_of(seg)
         if use is not None:
             print(f"\n===== {name} {tag} {seg['duration']}s [{use_name}] =====", flush=True)
             if dry:
@@ -297,7 +310,7 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
                     tid = use.submit_mm(seg["images"], wav, seg["prompt"],
                                         duration=seg["duration"], resolution="720p", ratio="9:16")
                 else:
-                    tid = use.submit_i2v(seg["anchor"], seg["prompt"],
+                    tid = use.submit_i2v(_i2v_anchor(seg), seg["prompt"],
                                          duration=seg["duration"], resolution="720p", ratio="9:16")
                 print(f"  {use_name}_task={tid}", flush=True)
                 json.dump({"seg": name, "backend": use_name, "task": tid},
@@ -354,7 +367,7 @@ if __name__ == "__main__":
                     help="口播段后端: jimeng(积分池,产品形体锚定最准) / mmh3(★H3最便宜,平面印刷图案强) / rh(同模型贵5倍)")
     ap.add_argument("--jimeng-model", default=None,
                     help=f"即梦档位,默认 {JIMENG_MODEL}(14积分/秒)。"
-                         "★非VIP seedance2.0 虽便宜43%但排队实测15小时+且占死槽位,已判死;"
+                         "★非VIP seedance2.0 虽便宜43%%但排队实测15小时+且占死槽位,已判死;"
                          "seedance2.5=26积分/秒、时长上限30s,只用于物理动作难的镜")
     ap.add_argument("--jimeng-res", default="720p",
                     help="即梦分辨率,默认720p。1080p/4k 仅 seedance2.0_vip 支持")

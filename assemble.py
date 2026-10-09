@@ -19,6 +19,32 @@ def dur(f):
          "-of", "csv=p=0", f]).strip())
 
 
+CROP_TOL = 0.03  # 画幅偏差 ≤3% 裁切铺满,超过则补边并告警
+
+
+def fit_filter(src, W, H, tol=CROP_TOL):
+    """片段 → 画布的缩放滤镜 + 告警(无告警为 None)。
+    ★小偏差裁切铺满(Kimi 线 09-12):mmh3 768P 原生 768×1344(4:7),按 9:16 补边会上下
+      各留 ~9px 黑边;放大铺满再居中裁掉溢出(~1.6%)肉眼无感。
+    ★大偏差补边 + 告警:960×960 方片这类画幅错误若也裁切,会静默裁掉 40% 画面把问题藏起来。"""
+    W, H = int(W), int(H)
+    try:
+        out = subprocess.run(["ffprobe", "-v", "quiet", "-select_streams", "v:0",
+                              "-show_entries", "stream=width,height", "-of", "csv=p=0", src],
+                             capture_output=True, text=True).stdout.strip().split(",")
+        w, h = int(out[0]), int(out[1])
+        dev = abs((w / h) / (W / H) - 1)
+    except Exception:
+        w = h = None
+        dev = 1.0
+    if dev <= tol:
+        return f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1", None
+    warn = (f"画幅 {w}x{h} 与画布 {W}x{H} 偏差 {dev:.0%},补边不裁切 —— 多半是生成画幅错了"
+            f"(方锚图推出方片?先跑 fit_anchor.py --check)") if w else "读不到画幅,按补边处理"
+    return (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+            f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1"), warn
+
+
 def _trim_target(s, audio_dir, master_audio=None):
     """该段应该保留多长。
     - 逐段配音模式: 规划跨度 end-start,但不得短于本段配音(B模式改词后配音会更长,不能切半句)。
@@ -60,10 +86,14 @@ def run(plan_path, clips_dir, audio_dir, out, trim_to_plan=False, master_audio=N
                 cut = ["-t", f"{t:.3f}"]; vd = t
         nv = os.path.join(work, f"{name}.mp4")
         W, H = size.lower().split("x")
+        vf, warn = fit_filter(clip, W, H)
+        if warn:
+            print(f"[assemble][⚠] {name}: {warn}", flush=True)
+        # ★-r 30 统一 CFR(Kimi 线 08-23 实撞):即梦片段声明 60fps 时间基,与 H3 的 24fps
+        #   混着 concat 时间戳互相覆盖,8×14s 拼出 89.4s。归一化阶段统一成 CFR。
         subprocess.run(["ffmpeg", "-y", "-i", clip, "-an"] + cut +
                        ["-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p",
-                        "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-                               f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1",
+                        "-vf", vf, "-r", "30",
                         nv, "-loglevel", "error"], check=True)
         norm_list.append(nv)
         # 2) 段配音 pad 到视频时长(无配音则纯静音)

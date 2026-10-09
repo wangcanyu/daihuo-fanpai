@@ -287,13 +287,16 @@ def load_profile(assets_path):
 # ★只在该镜确实在走时才追加的那半句(见 RIG_CLAUSE["chest_pov"] 注释)
 CHEST_POV_WALK = (" In this shot the wearer is walking, so the frame advances and sways "
                   "with the wearer's steps.")
-_WALK_WORDS = ("\u8d70", "\u8fc8", "\u524d\u884c", "\u8fce\u9762", "\u884c\u8d70")  # 走/迈/前行/迎面/行走
+# "在走路"的判词。⚠别用单字"走"/"迈"——"拿走/带走/迈过门槛"全是误伤(Kimi 线指出);
+#   只认明确的行走词。
+WALK_RE = re.compile(r"迎面|走来|走去|走向|走动|走路|步行|迈步|边走边|前行|行走|walks?\b|walking|approach", re.I)
 
 
 def shots_walking(shots):
     """这一段的反推动作里到底有没有人在走。★只读反推原文,不猜。"""
-    t = " ".join((x.get("action") or "") + (x.get("subject") or "") for x in (shots or []))
-    return any(w in t for w in _WALK_WORDS)
+    t = " ".join(str(x.get(k) or "") for x in (shots or [])
+                 for k in ("action", "subject", "camera", "scene"))
+    return bool(WALK_RE.search(t))
 
 
 def rig_clause(prof, shots=None):
@@ -702,7 +705,14 @@ def build(seg, shots, cfg, en):
     #   模型没有皂的参考只能瞎编(08-11 爆爆朵一 S3 编出绿叶软包装袋;23/58 段中招)。
     host_a = cfg.get("host_anchor")
     prod_only = [p for p in imgs if p != host_a]        # 先剥掉主播,语义归一
-    if len(labels) < len(prod_only) or not labels:
+    # ★exclude_forms 支持 "*":产品未登场段(如边走边说的开场)一张产品图都不挂。
+    #   旧设计保底"至少留一张产品图"防自由发挥,但把"该段本来就不该有产品"的路堵死了
+    #   (Kimi 线 09-18 燕麦西梅 S1:走路开场被强挂包装袋)。
+    _ex_all = "*" in set((cfg.get("exclude_forms") or {}).get(seg["seg"]) or [])
+    if _ex_all:
+        labels, prod_only = [], []
+        print(f"[h3] {seg['seg']} exclude_forms=* 产品未登场段,不挂任何产品图")
+    elif len(labels) < len(prod_only) or not labels:
         try:
             from plan_segments import pick_product_anchors, merged_form_map
             got, _miss = pick_product_anchors(shots, cfg.get("products", {}), merged_form_map(cfg))
@@ -717,7 +727,7 @@ def build(seg, shots, cfg, en):
     #   参考图上有字它就要抄。既然治不了渲染,就在【规划层】不给它这张图。
     #   这不是一次性手工修补:任何"这一段别用这个形态"的需求都走这里,
     #   而且写在 assets.json 里,重跑 h3_prompt 不会被冲掉。
-    ex = set((cfg.get("exclude_forms") or {}).get(seg["seg"]) or [])
+    ex = set((cfg.get("exclude_forms") or {}).get(seg["seg"]) or []) - {"*"}
     if ex and labels:
         keep = [(l, p) for l, p in zip(labels, prod_only) if l not in ex]
         if keep:
@@ -1259,6 +1269,10 @@ def main():
             json.dump(segs_raw, open(bak, "w"), ensure_ascii=False, indent=1)
         n_p = n_i = 0
         for seg in segs:
+            # ★即梦腿别灌 h3 英文六段式:gen_segments 读 seg["prompt"] 通喂所有后端,
+            #   即梦该吃中文自然语言提示词(Kimi 线 09-16 实撞:jimeng 腿全被覆盖成英文)。
+            if (seg.get("leg") or "").lower() == "jimeng":
+                continue
             body = open(os.path.join(a.out_dir, f"{seg['seg']}_h3.txt")).read()
             if seg.get("prompt") != body:
                 seg["prompt"] = body; n_p += 1
