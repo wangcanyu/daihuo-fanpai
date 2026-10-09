@@ -25,6 +25,8 @@ detailed_description / overall_soundscape / non_diegetic_music),正文英文、
 """
 import argparse, json, os, re, sys
 
+from plan_segments import load_shotlist   # 段级 shotlist 的唯一加载口
+
 # 屏上贴字/花字/后期特效类指令:必须剔出提示词(那是剪映的活;07-24 实证会泄漏进画面)
 # ★不止文字类:"画面叠加虚线圆圈""箭头指向""高亮"这些也是后期加的,让模型画会画进实拍层
 POST_WORDS = ("花字", "贴字", "字幕", "标注", "字样弹", "文字条", "角标",
@@ -1090,7 +1092,17 @@ def main():
 
     segs = json.load(open(a.plan))
     segs_raw = json.loads(json.dumps(segs))   # 深拷贝,用于 .bak_h3 备份
-    sl = {str(s["shot_id"]): s for s in json.load(open(a.shotlist))["shots"]}
+    # ★长镜被 plan 拆过时 shot_id 是 1a/1b/1c,原始 shotlist 里没有这些号 → 这里会 KeyError。
+    #   load_shotlist 会自动改吃 plan 落的段级分镜(单一事实源,别在这儿抄第二份判断)。
+    sl, _slp = load_shotlist(a.shotlist, a.plan)
+    if _slp != a.shotlist:
+        print(f"[h3] 分镜改吃段级 shotlist: {_slp}(长镜已拆,action 按段内时间窗裁过)",
+              file=sys.stderr)
+    _miss = sorted({str(x) for g in segs for x in g.get("shots", []) if str(x) not in sl})
+    if _miss:
+        sys.exit(f"[h3][✗] segments 引用了 shotlist 里没有的镜号 {_miss}。"
+                 f"用的是 {_slp};如果这些是长镜拆出的子段(1a/1b…),"
+                 f"说明 plan 没落段级分镜 —— 重跑一次 plan_segments.py 即可。")
     cfg = json.load(open(a.assets))
     if a.off_framing != "auto":
         cfg["off_window_framing"] = (a.off_framing == "on")

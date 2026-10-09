@@ -21,6 +21,10 @@ import requests
 from config import ark_endpoint as _ark_ep
 from config import ark_endpoint
 ARK_URL   = _ark_ep()[0].rstrip("/") + "/responses"
+# ★长片反推必须显式放开输出上限:不设时套餐默认 32000,193s 直播片的逐镜 JSON 会被
+#   截断,表现为 JSONDecodeError(09-07 另一台机器批量 300 条时撞的)。
+#   截断发生在【输出侧】,和输入时长无关 —— 镜头越多越危险,不是片越长越危险。
+ARK_MAX_TOKENS = int(os.environ.get("ARK_MAX_TOKENS", "64000"))
 from config import ARK_SEED_MODEL as ARK_MODEL   # 公共模型名,可用环境变量 ARK_SEED_MODEL 覆盖
 from config import ark_key
 NO_PROXY  = {"http": None, "https": None}     # 火山国内 endpoint,绝不走代理
@@ -38,7 +42,8 @@ SCHEMA = """{
    "shot_id": 1, "start": 0.0, "end": 0.0,
    "is_opening_3s": false,
    "shot_size": "特写/近景/中景/远景",
-   "camera": "固定/推/拉/摇/移/跟 + 速度",
+   "camera_evidence": "先客观描述:这一镜首帧和尾帧的构图差异(主体在画面里变大还是变小/位置怎么移/边框内容进出),不许写运镜标签",
+   "camera": "基于上一条 camera_evidence 再定标签:固定/推/拉/摇/移/跟 + 速度",
    "subject": "主体是谁/什么 + 画面位置",
    "action": "具体动作(力学级,主体+动作都要带全,别只写结果)",
    "scene": "环境",
@@ -115,9 +120,14 @@ ADJUDICATE_PROMPT = """下图是 %d 组"候选剪辑点"的前后帧对照,从�
 
 
 def _ark_json(content, timeout=300):
-    """调 Seed 拿 JSON。失败抛异常由调用方决定降级。"""
+    """调 Seed 拿 JSON。失败抛异常由调用方决定降级。
+
+    ⚠**契约:模型必须返回 JSON【对象】**——末行按 find("{")/rfind("}") 截取,
+    顶层返回数组会被截成畸形串。新调用方要一串东西时包一层:{"rows": [...]}。
+    (09-04 另一台机器的小字复检首版让 VLM 直接返数组,撞的就是这里。)"""
     from config import ark_key, ARK_SEED_MODEL
     body = {"model": ARK_SEED_MODEL, "thinking": {"type": "disabled"}, "stream": True,
+            "max_output_tokens": ARK_MAX_TOKENS,
             "input": [{"role": "user", "content": content}]}
     r = requests.post(ARK_URL, headers={"Authorization": f"Bearer {ark_endpoint()[1]}",
                       "Content-Type": "application/json"},
@@ -270,6 +280,7 @@ def ark_reverse(clip_path, cuts, duration, timeout=600):
             {"type": "input_video", "video_url": f"data:video/mp4;base64,{b64}"},
             {"type": "input_text", "text": prompt}]}],
         "thinking": {"type": "disabled"},     # ★关键:关推理 → 快17倍,精度不掉
+        "max_output_tokens": ARK_MAX_TOKENS,  # ★长片/多镜头会撞默认上限被截断(见文件头注释)
         "stream": True,
     }
     t0 = time.time()

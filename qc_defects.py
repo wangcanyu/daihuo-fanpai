@@ -22,6 +22,8 @@
   两版都跑一遍,再把两份判读表并排看。
 """
 import argparse, json, os, subprocess
+
+from plan_segments import load_shotlist   # 段级 shotlist 的唯一加载口
 from PIL import Image, ImageDraw
 
 LIP_GRID = 1.0        # 画外音窗口里每隔几秒抽一帧
@@ -99,7 +101,8 @@ def main():
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     segs = json.load(open(a.plan))
-    sl = {str(s["shot_id"]): s for s in json.load(open(a.shotlist))["shots"]}
+    # ★长镜拆过后镜号是 1a/1b/1c,原始 shotlist 没有这些号 → 这行会 KeyError
+    sl, _slp = load_shotlist(a.shotlist, a.plan)
 
     lip_pick = [x for x in a.lip_segs.split(",") if x]
     rep, lip_rows = [], []

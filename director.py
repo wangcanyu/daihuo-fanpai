@@ -18,10 +18,51 @@ director.py — 提示词「约束维度」检查表(生成前的最后一道闸
 """
 import argparse, json, os, re, sys
 
+from plan_segments import load_shotlist   # 段级 shotlist 的唯一加载口
+
 # ─── 约束维度检查表 ──────────────────────────────────────────────────────────
 # applies_kw : 命中这些词 = 本段【需要】这条约束
 # present_kw : 提示词里出现任一 = 这条约束【已经在】(中英都列,h3提示词是英文)
 # 每条都写明「哪次翻车教的」,别删,它是这条规则的存在理由
+# ★09-10 事实锚点两闸的词表(借鉴即创管线:权威感只许来自可见事实+真证据)
+#   词表要克制 —— "一条只会喊狼来了的闸,比没有闸更糟"(subject_side 那条注释的教训)。
+#   已剔掉过松的:英文 research/doctor(带货语境里几乎必然误报)。
+PROMO_KW = ("清仓", "秒杀", "限时", "限量", "折扣", "打折", "赠品", "包邮",
+            "买一送", "买二送", "拍下", "到手价", "原价", "特价", "福利价", "优惠",
+            "半价", "免费送", "加送", "立减", "最后一天", "亏本", "赔本")
+# ★"便宜"单独入表 = 5/31 条真项目全是误报(09-10 实测):"别贪便宜""比鲜榴莲便宜"
+#   "这么便宜,智商税吧""机票不是便宜才1000多吗" —— 反向用法、品类比较、跟产品无关的闲聊。
+#   收紧成:必须同句带价格/下单线索,且前 4 字内没有否定/比较词。热敷披肩的"便宜清了"仍命中。
+PROMO_SOFT = "便宜"
+PROMO_SOFT_CUE = ("元", "块", "价", "抢", "下单", "链接", "拍", "囤", "清")
+# ⚠否定词不能拿子串匹配:"特别便宜"里的"别"会把真促销句吃掉(09-10 实撞)。用正则带上下文。
+PROMO_SOFT_NEG_RE = (
+    r"(?:贪|图)\s*便宜",                    # 别贪便宜 / 图便宜
+    r"(?<!特)别[^。,，]{0,3}便宜",            # 别买便宜的(排掉"特别便宜")
+    r"(?:不要|不能|甭)[^。,，]{0,3}便宜",
+    r"(?:这么|那么|太)便宜",                  # 反预期铺垫:"这么便宜,智商税吧"
+    #  ⚠"真便宜/挺便宜"不算否定 —— 那是正经促销说法,别一起吃掉
+    r"(?:不是|没有|没|不)便宜",
+    r"比[^。,，]{0,8}便宜",                   # 品类比较:"比鲜榴莲便宜"
+)
+
+
+def _hit_promo_soft(txt):
+    """『便宜』只在【同句有价格/下单线索】且【不是否定/比较/反预期用法】时才算促销承诺。"""
+    for sent in re.split(r"[。!?！？;；\n]", txt):
+        if PROMO_SOFT not in sent:
+            continue
+        if any(re.search(r_, sent) for r_ in PROMO_SOFT_NEG_RE):
+            continue
+        if any(c in sent for c in PROMO_SOFT_CUE):
+            return True
+    return False
+AUTH_KW = ("白大褂", "实验室", "研究院", "研究所", "专家", "教授", "医生", "医师",
+           "药师", "检测报告", "质检报告", "认证", "专利", "证书", "资质", "权威",
+           "临床", "国家标准", "lab coat", "white coat", "laboratory", "expert",
+           "professor", "certificate", "certification", "patent", "clinical", "institute")
+
+
 RULES = [
     dict(
         id="cast_count", name="人数硬约束",
@@ -248,7 +289,47 @@ RULES = [
         fix="要么给缺的那个人补一张人设图(make_cast_sheet)并加进 cast.json,"
             "要么改写动作描述让人数与在册角色一致 —— 但**不要两句话就这么放着**",
     ),
+    dict(
+        id="promo_anchor", name="促销话术必须有活动事实兜底",
+        why="09-08 热敷披肩(另一台机器):A 模式照抄原片『便宜清了』—— 那是【别人的】活动,"
+            "我们并没有;台词里的价格承诺没有事实来源就是虚假宣传。实测精准命中 S1/S7",
+        applies_when=lambda seg, shots: True,     # 触发条件在 check_promo 里自己算
+        check_promo=True,
+        fix="在 plan 同目录放 facts.json 写清 activity(如『拍2斤到手3斤+送一瓶海参酱油』);"
+            "A 模式照抄原片话术也要写一句确认『这个活动我们真有』才算数。"
+            "确实没有活动就把价格/促销词从台词里删干净,CTA 只留行动(『点下方链接』)",
+    ),
+    dict(
+        id="authority_evidence", name="权威感必须有真证据",
+        why="09-08 即创管线借鉴:权威感只许来自【可见事实+真证据】。白大褂/工牌/实验室"
+            "这类布景级暗示也算伪造 —— 观众读到的是『专业机构背书』,而我们拿不出来",
+        applies_when=lambda seg, shots: True,
+        check_authority=True,
+        fix="要么在 facts.json/assets.json 里写 evidence(检测报告编号/专利号/资质,"
+            "且能拿出实物图);要么把白大褂/实验室/专家/检测报告这类词从提示词和分镜里删掉,"
+            "改用画面上真看得见的事实(『刷头是山型凸起』这种)",
+    ),
 ]
+
+
+def _load_ctx(plan_path, assets_path=None):
+    """事实账本:facts.json(localize_seed 的输入,B 模式必有)优先,assets.json 兜底。
+    只取两闸要用的字段 —— activity(活动)与 evidence(权威证据)。"""
+    ctx = {}
+    cands = [os.path.join(os.path.dirname(os.path.abspath(plan_path)), "facts.json")]
+    if assets_path:
+        cands.append(assets_path)
+    for c in cands:
+        if not os.path.exists(c):
+            continue
+        try:
+            d = json.load(open(c))
+        except Exception:
+            continue
+        for k in ("activity", "evidence"):
+            if not ctx.get(k) and str(d.get(k) or "").strip():
+                ctx[k] = str(d[k]).strip()
+    return ctx
 
 
 def _blob(seg, shots):
@@ -257,8 +338,9 @@ def _blob(seg, shots):
                      for s in shots])
 
 
-def check_segment(seg, shots, prompt, is_h3=False):
-    """返回该段缺失/违规的约束列表 [(rule, 说明)]"""
+def check_segment(seg, shots, prompt, is_h3=False, ctx=None):
+    """返回该段缺失/违规的约束列表 [(rule, 说明)]。ctx = _load_ctx() 的事实账本"""
+    ctx = ctx or {}
     src = _blob(seg, shots)
     p = prompt or ""
     out = []
@@ -325,6 +407,21 @@ def check_segment(seg, shots, prompt, is_h3=False):
                     if "host_anchor" not in str(x) and "scene" not in str(x)]
             if not prod:
                 out.append((r, "本段提到产品,但参考图里只有主播/场景,没有任何产品图"))
+        elif r.get("check_promo"):                # 促销话术 ⇄ 有没有真活动
+            txt = (seg.get("dialogue") or "") + " ".join(
+                (sh.get("onscreen_text") or "") for sh in shots)
+            hit = [k for k in PROMO_KW if k in txt]
+            if _hit_promo_soft(txt):
+                hit.append(PROMO_SOFT)
+            if hit and not ctx.get("activity"):
+                out.append((r, f"台词/屏字出现促销词 {hit[:3]},但事实账本里没有 activity "
+                               f"—— 这个优惠没有来源(A 模式照抄原片的活动也不算我们的)"))
+        elif r.get("check_authority"):            # 权威感 ⇄ 有没有真证据
+            blob = (p + " " + src).lower()
+            hit = [k for k in AUTH_KW if k.lower() in blob]
+            if hit and not ctx.get("evidence"):
+                out.append((r, f"提示词/分镜出现权威元素 {hit[:3]},但事实账本里没有 evidence "
+                               f"—— 布景级暗示(白大褂/工牌)也算伪造背书"))
         elif r.get("forbid"):                     # 这类要求"不该出现在提示词里"
             hit = [k for k in r.get("applies_kw", []) if k in p]
             if r.get("applies_re"):
@@ -355,7 +452,16 @@ def main():
     a = ap.parse_args()
 
     segs = json.load(open(a.plan))
-    sl = {str(s["shot_id"]): s for s in json.load(open(a.shotlist))["shots"]}
+    # ★同 h3_prompt:长镜拆过后镜号是 1a/1b/1c。这里以前是 `if str(x) in sl` 静默跳过 ——
+    #   审了个寂寞还报"全部通过",比崩掉更危险。改吃段级分镜 + 缺号响亮报。
+    sl, _slp = load_shotlist(a.shotlist, a.plan)
+    if _slp != a.shotlist:
+        print(f"[director] 分镜改吃段级 shotlist: {_slp}")
+    _miss = sorted({str(x) for g in segs for x in g.get("shots", []) if str(x) not in sl})
+    if _miss:
+        print(f"[director][✗] segments 引用了 shotlist 里没有的镜号 {_miss} —— "
+              f"这些镜【没有被审过】。用的是 {_slp};长镜子段(1a/1b…)缺失说明 plan "
+              f"没落段级分镜,重跑 plan_segments.py。", file=sys.stderr)
     # ★检查 h3 提示词时,参考图的真相在 prompts/images.json(那才是喂给模型的清单),
     #   不是 segments.json 里 plan 阶段留下的旧 images
     # ★★漂移闸(08-16 血案):`--prompts-dir` 会拿 prompts/ 覆盖 plan 再审 ——
@@ -387,8 +493,12 @@ def main():
         for s in segs:
             if s["seg"] in man:
                 s["images"] = man[s["seg"]]
+    # ★事实账本(promo_anchor / authority_evidence 两闸的依据)
+    ctx = _load_ctx(a.plan, a.assets)
     total = 0
-    print(f"[director] 约束维度检查 — {len(segs)} 段,{len(RULES)} 条规则\n")
+    print(f"[director] 约束维度检查 — {len(segs)} 段,{len(RULES)} 条规则"
+          + (f" · 事实账本:{'/'.join(sorted(ctx))}" if ctx else
+             " · ⚠无事实账本(facts.json/assets.json 都没有 activity/evidence)") + "\n")
     for seg in segs:
         shots = [sl[str(x)] for x in seg.get("shots", []) if str(x) in sl]
         if a.prompts_dir:
@@ -397,7 +507,7 @@ def main():
             is_h3 = True
         else:
             prompt, is_h3 = seg.get("prompt", ""), False
-        miss = check_segment(seg, shots, prompt, is_h3)
+        miss = check_segment(seg, shots, prompt, is_h3, ctx)
         if not miss:
             continue
         total += len(miss)
@@ -407,11 +517,15 @@ def main():
             print(f"      修:{r['fix']}")
             print(f"      (这条是被这次教的:{r['why']})")
         print()
-    if total == 0:
+    if total == 0 and not _miss:
         print("  ✓ 全部通过,没有缺席的约束")
     else:
-        print(f"  共 {total} 处缺失 —— **这是生成前的最后一道闸,别带着缺失去烧钱**")
-    if a.strict and total:
+        if total:
+            print(f"  共 {total} 处缺失 —— **这是生成前的最后一道闸,别带着缺失去烧钱**")
+        if _miss:
+            # ★缺号时绝不能报"全部通过":那几镜根本没进检查,是"审了个寂寞"
+            print(f"  ⚠ 另有 {len(_miss)} 个镜号查无此镜({', '.join(_miss)}),**这些镜没被审过**")
+    if a.strict and (total or _miss):
         sys.exit(1)
 
 

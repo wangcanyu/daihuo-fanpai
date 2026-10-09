@@ -35,9 +35,13 @@ from export_subs import sentences, fmt_ts  # 复用切句/时间码
 
 # ── 路径:WSL ↔ Windows ─────────────────────────────────────────────
 def to_wsl(p):
-    """'D:\\x\\y' / 'D:/x/y' → '/mnt/d/x/y';已是 posix 路径则原样返回"""
+    """'D:\\x\\y' / 'D:/x/y' → '/mnt/d/x/y';已是 posix 路径则原样返回。
+
+    ★只在真的有 /mnt 挂载点(WSL)时才转(09-04 另一台机器实撞):
+      Windows 原生 Python 上把 'D:/...' 转成 '/mnt/d/...' 会指向不存在的路径,
+      剪映草稿模式必挂。没有 /mnt 就说明不是 WSL,盘符路径本来就是对的。"""
     m = re.match(r"^([A-Za-z]):[\\/](.*)$", p)
-    if m:
+    if m and os.path.isdir("/mnt"):
         return f"/mnt/{m.group(1).lower()}/" + m.group(2).replace("\\", "/")
     return p
 

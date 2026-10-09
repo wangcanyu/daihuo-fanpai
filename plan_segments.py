@@ -18,7 +18,7 @@ plan_segments.py — 生成方案规划(转换/迁移阶段)
 }
 用法: python3 plan_segments.py shotlist.json assets.json --out segments.json
 """
-import argparse, json, math, os, re
+import argparse, json, math, os, re, sys
 
 TAIL = "电影质感,真实生活感。保持无字幕,不要生成BGM或背景音乐,不要生成Logo,不要生成水印。"
 MAX_DUR = 12      # 单段目标时长上限(multimodal 硬上限15,留余量)
@@ -26,13 +26,20 @@ MAX_CUTS = 3      # 单段最多归并 3 个镜头(=2 个内部硬切;即梦内�
 
 
 def _distribute(sents, n):
-    """把句子列表按字数尽量均匀分成 n 组"""
+    """把句子列表按字数尽量均匀分成 n 组。
+
+    ★只要 len(sents) >= n 就保证每组非空:贪心时要给后面的组留够份额,
+      否则句子偏长偏后时最后一组拿到空串 —— 长镜拆子段时那意味着
+      某个子段没台词/没动作,而调用方看到的只是一个静悄悄的空字符串。
+      (09-10 实撞:4 分句分 3 段,第 3 段空)"""
     total = sum(len(x) for x in sents) or 1
     target = total / n
     groups, cur, cur_len = [], [], 0
-    for s in sents:
+    for k, s in enumerate(sents):
         cur.append(s); cur_len += len(s)
-        if cur_len >= target and len(groups) < n - 1:
+        rest = len(sents) - k - 1        # 还剩几句没分
+        need = n - len(groups) - 1       # 收掉当前组后还差几组要凑
+        if len(groups) < n - 1 and (cur_len >= target or rest <= need):
             groups.append("".join(cur)); cur, cur_len = [], 0
     groups.append("".join(cur))
     while len(groups) < n:
@@ -40,8 +47,33 @@ def _distribute(sents, n):
     return groups[:n]
 
 
+# ★反推对长镜的 action 常写成"先…随后…最后…"的多段式复合描述
+#   (09-08 热敷披肩:25s 一镜被写成三段动作)。这也是「漏切」的判据之一。
+SEQ_MARKS = ("首先", "先是", "接着", "紧接着", "随后", "然后", "之后", "最后", "末了", "先")
+
+
+def _split_action(action, n):
+    """长镜拆成 n 个子段后,动作描述按【段内时间窗】裁剪,返回 (n 段动作, 是否真裁过)。
+
+    ★09-08 热敷披肩实撞:25s 镜切成 8.3s×3 段,每段提示词里的 action 还是整段 25 秒的
+      —— 模型会把 25 秒的动作压进 8 秒。
+    切不出 ≥n 个分句时不裁(每段沿用全文):那多半本来就是一个连续动作,
+    硬切会让某个子段拿到空动作,比压缩更糟。"""
+    act = (action or "").strip()
+    if not act or n <= 1:
+        return [act] * n, False
+    parts = [x for x in re.split(r"(?<=[。；;，,])", act) if x.strip()]
+    if len(parts) < n:
+        return [act] * n, False
+    groups = _distribute(parts, n)
+    if any(not g.strip() for g in groups):     # 分句极不均匀时宁可不裁
+        return [act] * n, False
+    return groups, True
+
+
 def split_long_shots(shots, max_dur=15):
-    """超过 max_dur 的单个长镜 → 按句子边界拆成多个子段(1a/1b…),台词按字数分配"""
+    """超过 max_dur 的单个长镜 → 按句子边界拆成多个子段(1a/1b…),台词按字数分配,
+    动作按段内时间窗裁剪(见 _split_action)。"""
     out = []
     for s in shots:
         dur = s["end"] - s["start"]
@@ -50,16 +82,44 @@ def split_long_shots(shots, max_dur=15):
         n = math.ceil(dur / MAX_DUR)
         sents = [x for x in re.split(r"(?<=[。！？!?，,])", s.get("dialogue", "") or "") if x]
         chunks = _distribute(sents, n)
+        acts, cropped = _split_action(s.get("action", ""), n)
+        if not cropped and any(m in (s.get("action") or "") for m in SEQ_MARKS):
+            # 响亮:多段式动作却没裁成 —— 这几个子段都会挂整段动作,必须人审
+            print(f"[plan][⚠] #{s['shot_id']} 是 {dur:.1f}s 长镜,action 带多段式连接词却切不出 "
+                  f"{n} 个分句,{n} 个子段会各挂一份整段动作(模型把长动作压进短段)。"
+                  f"→ 回 shotlist 把这镜 action 按时间顺序断成 ≥{n} 个分句", file=sys.stderr)
         seglen = dur / n
         for i in range(n):
             ns = dict(s)
             ns["start"] = round(s["start"] + i * seglen, 2)
             ns["end"] = round(s["start"] + (i + 1) * seglen, 2)
             ns["dialogue"] = chunks[i]
+            ns["action"] = acts[i]
             ns["shot_id"] = f"{s['shot_id']}{chr(97 + i)}"
             ns["_split"] = True
+            ns["_action_cropped"] = cropped
             out.append(ns)
     return out
+
+
+def split_shotlist_path(plan_path):
+    """段级 shotlist 的落点(与 segments.json 同名同目录)。"""
+    return os.path.splitext(plan_path)[0] + ".shotlist.json"
+
+
+def load_shotlist(shotlist_path, plan_path=None):
+    """★下游(h3_prompt / director)取分镜的唯一入口,返回 (dict{shot_id: shot}, 实际用的路径)。
+
+    plan 拆过长镜后 shot_id 变成 1a/1b/1c,**原始 shotlist 里没有这些号** ——
+    h3_prompt 直接 KeyError 崩,director 静默跳过(审了个寂寞)。
+    所以只要 plan 旁边有 <plan>.shotlist.json 就必须吃那份:段级口径才是生成用的口径。
+    ⚠这份逻辑不要抄第二份(h3_prompt:1127 那条教训)。"""
+    p = shotlist_path
+    if plan_path:
+        side = split_shotlist_path(plan_path)
+        if os.path.exists(side):
+            p = side
+    return {str(s["shot_id"]): s for s in json.load(open(p))["shots"]}, p
 
 
 # ★镜头 → 生成腿的路由表(08-10 四方对照实测定的分工)。
@@ -385,6 +445,11 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
     form_map = merged_form_map(cfg)
     verbs = PRODUCT_VERBS + [v for v in (cfg.get("product_verbs") or []) if v not in PRODUCT_VERBS]
     shots = split_long_shots(sl["shots"])       # 修1: 先拆超长单镜
+    # ★段级 shotlist 落盘:拆完 shot_id 变成 1a/1b/1c,下游必须吃这份才对得上号
+    #   (h3_prompt 从 shotlist 读 action,不看 segments 的 prompt —— 两个口径漂移=白改)
+    slp, _nsplit = split_shotlist_path(out_path), sum(1 for x in shots if x.get("_split"))
+    json.dump({**{k: v for k, v in sl.items() if k != "shots"}, "shots": shots},
+              open(slp, "w"), ensure_ascii=False, indent=2)
     groups = group_shots(shots, max_cuts, min_dur, hard_max_cuts, by_leg, hero_strict)
 
     segments, md = [], [f"# 生成方案 ({len(groups)}段)\n", f"产品: {prod_desc}\n"]
@@ -439,6 +504,8 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
     mdp = out_path.replace(".json", ".md")
     open(mdp, "w").write("\n".join(md))
     print(f"[plan] {len(segments)}段 → {out_path}")
+    print(f"[plan] 段级分镜 → {slp}"
+          + (f"  ({_nsplit} 个子段由长镜拆出,下游自动改吃这份)" if _nsplit else ""))
     nwarn = sum(len(s["warns"]) for s in segments)
     for s in segments:
         tag = {"mm": "口播", "i2v": "image2video"}[s["type"]]

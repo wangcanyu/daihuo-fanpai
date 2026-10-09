@@ -19,6 +19,8 @@ qc_cast.py — 人物跨镜一致性验收(切镜变脸的专用体检)
 """
 import argparse, json, os, subprocess, sys
 
+from plan_segments import load_shotlist   # 段级 shotlist 的唯一加载口
+
 from PIL import Image, ImageDraw, ImageFont
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
@@ -116,8 +118,14 @@ def main():
     out = a.out if os.path.isabs(a.out) else os.path.join(run, a.out)
     os.makedirs(out, exist_ok=True)
 
-    segs = json.load(open(os.path.join(run, "segments.json")))
-    sl = {str(s["shot_id"]): s for s in json.load(open(os.path.join(run, "shotlist.json")))["shots"]}
+    _planp = os.path.join(run, "segments.json")
+    segs = json.load(open(_planp))
+    # ★长镜拆过后镜号是 1a/1b/1c;这里以前 `if str(i) in sl` 静默跳过 = 审了个寂寞
+    sl, _slp = load_shotlist(os.path.join(run, "shotlist.json"), _planp)
+    _miss = sorted({str(x) for g in segs for x in g.get("shots", []) if str(x) not in sl})
+    if _miss:
+        print(f"[qc_cast][⚠] 镜号查无此镜 {_miss} —— 这些镜没被审过。"
+              f"长镜子段(1a/1b…)缺失说明 plan 没落段级分镜,重跑 plan_segments.py")
     cp = os.path.join(run, "cast.json")
     cast = (json.load(open(cp)).get("roles") or []) if os.path.exists(cp) else []
     if not cast:

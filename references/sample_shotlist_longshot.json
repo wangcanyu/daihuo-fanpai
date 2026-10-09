@@ -1,0 +1,11 @@
+{"duration": 33.0, "shots": [
+ {"shot_id": 1, "start": 0.0, "end": 8.0, "shot_size": "中景", "camera": "固定",
+  "scene": "客厅沙发", "subject": "女主播", "product_role": "package_text",
+  "action": "主播举起披肩包装袋对镜头展示", "dialogue": "这个热敷披肩真的绝了。",
+  "product_in_frame": "包装袋", "is_opening_3s": true},
+ {"shot_id": 2, "start": 8.0, "end": 33.0, "shot_size": "中景", "camera": "固定",
+  "scene": "客厅沙发", "subject": "女主播", "product_role": "package_text",
+  "action": "主播先把披肩展开露出正面绒布，随后转身把披肩披到肩上，接着伸手拉紧胸前的搭扣，最后插上电源线按下加热开关",
+  "dialogue": "先看这个面料。披上去很服帖。扣子一扣就固定住了。插电三秒就热。",
+  "product_in_frame": "披肩"}
+]}
