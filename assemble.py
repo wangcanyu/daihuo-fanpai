@@ -4,6 +4,8 @@ assemble.py — 装配模块(拼接 + 铺连续配音轨)
 
 吃 segments.json + clips/<seg>.mp4 + audio/seg/<seg>.wav → 完整成片。
 内置踩过的坑:
+  - ★段配音优先取 clip 内嵌音轨(09-21 口型漂移真相):后端已把音频按口型对齐位置
+    嵌回 clip,原始 wav 铺段首会重新放出模型 lead-in(C海参 S1 实测 +0.275s)
   - 每段配音 pad 到该段【视频时长】→ 口播段口型对齐(段音频对齐到段起点)
   - 视频先逐段归一化(scale+pad 720x1280+setsar)再 concat → 避免异源 NAL 错
   - 配音轨与画面等长 mux; 缺配音的段填静音(纯画面段)
@@ -45,6 +47,17 @@ def fit_filter(src, W, H, tol=CROP_TOL):
             f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1"), warn
 
 
+def _has_audio(f):
+    """clip 是否带非静音的音轨(后端会把对齐好的输入音频嵌回产物,09-21)。"""
+    try:
+        r = subprocess.run(["ffprobe", "-v", "quiet", "-select_streams", "a:0",
+                            "-show_entries", "stream=codec_type", "-of", "csv=p=0", f],
+                           capture_output=True, text=True)
+        return "audio" in r.stdout
+    except Exception:
+        return False
+
+
 def _trim_target(s, audio_dir, master_audio=None):
     """该段应该保留多长。
     - 逐段配音模式: 规划跨度 end-start,但不得短于本段配音(B模式改词后配音会更长,不能切半句)。
@@ -61,6 +74,22 @@ def _trim_target(s, audio_dir, master_audio=None):
     if wav and os.path.exists(wav):
         span = max(span, dur(wav))
     return span
+
+
+def _talking_trim(s, clips_dir):
+    """talking 段的裁剪目标:实测语音尾 + 0.35s 气口(不按规划 span——
+    模型语速比估算慢,按 span 裁必切半句(09-21 全talking片 6/6 段被截真实撞)。
+    语音尾取自 qc_talking.json 的 timing.dur(ASR 实测);没有则回落 span。"""
+    span = float(s.get("end", 0)) - float(s.get("start", 0))
+    qc = os.path.join(os.path.dirname(os.path.abspath(clips_dir)), "qc_talking.json")
+    try:
+        d = json.load(open(qc, encoding="utf-8"))
+        speech_end = (d.get(s["seg"]) or {}).get("timing", {}).get("dur")
+        if speech_end:
+            return round(float(speech_end) + 0.35, 3)
+    except Exception:
+        pass
+    return span if span > 0 else None
 
 
 def run(plan_path, clips_dir, audio_dir, out, trim_to_plan=False, master_audio=None,
@@ -81,7 +110,10 @@ def run(plan_path, clips_dir, audio_dir, out, trim_to_plan=False, master_audio=N
         #   A 模式配 --master-audio 直铺原音时更会累积错位。
         cut = []
         if trim_to_plan:
-            t = _trim_target(s, audio_dir, master_audio)
+            if s.get("talking"):
+                t = _talking_trim(s, clips_dir)     # ★talking:按实测语音尾裁,不按span
+            else:
+                t = _trim_target(s, audio_dir, master_audio)
             if t and vd > t + 0.05:
                 cut = ["-t", f"{t:.3f}"]; vd = t
         nv = os.path.join(work, f"{name}.mp4")
@@ -96,10 +128,18 @@ def run(plan_path, clips_dir, audio_dir, out, trim_to_plan=False, master_audio=N
                         "-vf", vf, "-r", "30",
                         nv, "-loglevel", "error"], check=True)
         norm_list.append(nv)
-        # 2) 段配音 pad 到视频时长(无配音则纯静音)
+        # 2) 段配音:clip 内嵌音轨优先(★09-21 口型漂移真相)——后端生成时嘴有 lead-in,
+        #   但它把输入音频【按口型对齐好的位置】嵌回 clip(SyncNet 实测 clip 内音画差
+        #   ≤0.04s);而外部的原始 wav 铺在段首会把 lead-in 重新放出来
+        #   (C海参 S1 实测 +0.275s)。所以该段有 wav(=生成时喂过音频)且 clip 带音轨时,
+        #   直接取 clip 内嵌音轨(0→vd,与画面同锚);没喂音频的段照旧铺 wav/静音。
         na = os.path.join(work, f"{name}.wav")
         wav = os.path.join(audio_dir, f"{name}.wav") if audio_dir else ""
-        if wav and os.path.exists(wav):
+        has_embedded = (wav and os.path.exists(wav) or s.get("talking")) and _has_audio(clip)
+        if has_embedded:
+            subprocess.run(["ffmpeg", "-y", "-i", clip, "-vn", "-t", f"{vd}",
+                            "-ar", "44100", "-ac", "2", na, "-loglevel", "error"], check=True)
+        elif wav and os.path.exists(wav):
             subprocess.run(["ffmpeg", "-y", "-i", wav, "-af", "apad", "-t", f"{vd}",
                             "-ar", "44100", "-ac", "2", na, "-loglevel", "error"], check=True)
         else:

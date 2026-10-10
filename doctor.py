@@ -234,6 +234,19 @@ def check_depth():
     return OK, f"就位({py}){'' if gpu else ' ⚠无 GPU,12s 片要跑好几分钟'};模型首次走 hf-mirror 自动下载"
 
 
+def check_lip():
+    """SyncNet 口型偏移(qc_talking / qc_sync_offset):专用解释器 + 权重。可选 —— 没装时 qc_talking 口型一项记"未测"。"""
+    import config
+    w = os.path.join(config.syncnet_home(), "syncnet_v2.model")
+    if not os.path.exists(w):
+        return WARN, f"SyncNet 权重不在 {w} → talking 验收只测逐字、口型未测(可选;装法见 qc_sync_offset.py 文件头)"
+    py = config.lip_python()
+    r = sh([py, "-c", "import torch, mediapipe, python_speech_features"])
+    if not r or r.returncode != 0:
+        return WARN, f"{py} 缺 torch/mediapipe/python_speech_features → 口型闸不可用(可选,设 DAIHUO_LIP_PYTHON)"
+    return OK, f"就位({py})"
+
+
 def main():
     checks = [("ffmpeg", check_ffmpeg), ("即梦CLI(生成)", check_dreamina),
               ("反推模型/计费口子", check_ark),
@@ -245,6 +258,7 @@ def main():
               ("Seed-VC(换声,可选)", check_seedvc),
               ("词级对齐/词网格(可选)", check_wordalign),
               ("深度动作参考(可选)", check_depth),
+              ("SyncNet口型闸(可选)", check_lip),
               ("剪映草稿交付", check_jianying), ("代理", check_proxy)]
     print("===== 复刻 skill 环境体检 =====")
     blockers = []

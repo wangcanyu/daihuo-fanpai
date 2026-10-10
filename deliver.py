@@ -11,6 +11,9 @@ deliver.py — 交付模块(第8步装配之后的最后一公里,两种产物)
 
 字幕时间轴:优先吃 tts_segments 产出的 audio/seg/timing.json(逐句真实时长,精确),
 缺失时退化为"句长按字数占比摊"(粗对齐)。
+final 字幕引擎(--subs,默认 auto):plan 有 talking 段且 clips 同级 qc_talking.json
+带词级窗时改走 subs_karaoke 逐词卡拉OK渲染(治 drawtext 叠行/样式死板);
+非 talking 的片照旧 drawtext,行为零变化。
 
 ★★ assemble 用了 --trim-to-plan / --master-audio 时,deliver 必须【也带 --trim-to-plan】。
    否则视频轨按 clip 原始时长累加(后端有 4s/5s 下限,普遍比规划跨度长),
@@ -67,6 +70,17 @@ def dur(f):
          "-of", "csv=p=0", f]).strip())
 
 
+def _has_audio(f):
+    """clip 是否带音轨(后端把对齐好的输入音频嵌回产物,09-21;与 assemble 同口径)。"""
+    try:
+        r = subprocess.run(["ffprobe", "-v", "quiet", "-select_streams", "a:0",
+                            "-show_entries", "stream=codec_type", "-of", "csv=p=0", f],
+                           capture_output=True, text=True)
+        return "audio" in r.stdout
+    except Exception:
+        return False
+
+
 # ── 字幕条目(两种模式共用) ───────────────────────────────────────────
 def build_entries(segs, seg_starts, timing):
     """→ [(start_s, end_s, text)]。timing 命中的段逐句精确,否则按字数占比摊。"""
@@ -85,12 +99,15 @@ def build_entries(segs, seg_starts, timing):
             for ln in lines:
                 sents = sentences(dualtext.display(ln["text"]))   # 旧 timing 可能带标记,兜底取显示投影
                 total = sum(len(x) for x in sents) or 1
-                s0 = t0 + off
+                # ★行可带绝对起点 start(talking 的逐句真实窗,09-21):
+                #   句间有停顿,累积平铺会把后句压进前句的停顿里
+                base = t0 + (ln["start"] if ln.get("start") is not None else off)
+                s0 = base
                 for x in sents:
                     d = ln["dur"] * len(x) / total
                     entries.append((s0, min(s0 + d, t0 + vd), x))
                     s0 += d
-                off += ln["dur"]
+                off = (ln["start"] if ln.get("start") is not None else off) + ln["dur"]
         else:  # 粗对齐兜底
             d = dualtext.display((s.get("dialogue") or "").strip(), where=name)
             if not d:
@@ -179,11 +196,32 @@ def deliver_draft(segs, clips_dir, audio_dir, timing, drafts_dir, name,
         #   成片 19.5s 才是全的;A 模式 wav≈span 从不暴露)。
         if trim_to_plan and wav_src and os.path.exists(wav_src):
             use_us = min(max(use_us, int(dur(wav_src) * 1e6)), mat.duration)
+        if trim_to_plan and s.get("talking"):
+            # ★talking 段与 assemble._talking_trim 同口径:按 qc_talking.json 的
+            #   ASR 语音尾 +0.35s 裁(模型语速慢于规划,按 span 裁必切半句,09-21 实撞:
+            #   成片 40.1s 而草稿按 span 裁成 35.0s,S6 又被截尾)
+            try:
+                _qc = json.load(open(os.path.join(os.path.dirname(os.path.abspath(clips_dir)),
+                                                  "qc_talking.json"), encoding="utf-8"))
+                _se = (_qc.get(nm) or {}).get("timing", {}).get("dur")
+                if _se:
+                    use_us = min(max(use_us, int((float(_se) + 0.35) * 1e6)), mat.duration)
+            except Exception:
+                pass
         script.add_segment(jy.VideoSegment(mat, jy.Timerange(t_us, use_us),
                                            source_timerange=jy.Timerange(0, use_us)), "主视频")
-        if wav_src and os.path.exists(wav_src):
+        if (wav_src and os.path.exists(wav_src)) or (s.get("talking") and _has_audio(src)):
             wav = os.path.join(mat_dir, f"{nm}.wav")
-            shutil.copy(wav_src, wav)
+            # ★与 assemble 同口径(09-21):该段生成时喂过音频【或 talking 音画同出段】
+            #   且 clip 带音轨 → 用 clip 内嵌音轨(后端已把音频按口型对齐位置嵌回,
+            #   SyncNet ≤0.04s),原始 wav 铺段首会把模型 lead-in 放出来。
+            #   内嵌轨长不足 use_us 时剪映里自动留静。
+            if _has_audio(src):
+                subprocess.run(["ffmpeg", "-y", "-i", src, "-vn",
+                                "-t", f"{use_us / 1e6:.3f}", "-ar", "44100", "-ac", "2",
+                                wav, "-loglevel", "error"], check=True)
+            else:
+                shutil.copy(wav_src, wav)
             amat = jy.AudioMaterial(wav)
             ad = min(amat.duration, use_us)         # 配音超长截到段尾(与assemble口径一致)
             script.add_segment(jy.AudioSegment(
@@ -229,7 +267,25 @@ def deliver_draft(segs, clips_dir, audio_dir, timing, drafts_dir, name,
 WIN_FONTS = "/mnt/c/Windows/Fonts"
 
 
-def deliver_final(segs, clips_dir, audio_dir, timing, full, out, bgm=None, bgm_vol=0.15):
+def _karaoke_ok(segs, clips_dir):
+    """final 模式能否走卡拉OK字幕:plan 有 talking 段 且 clips 同级 qc_talking.json
+    里至少一段有词级窗(timing.words)。返回 (可用?, qc dict或None)。"""
+    if not any(s.get("talking") for s in segs):
+        return False, None
+    qc_path = os.path.join(os.path.dirname(os.path.abspath(clips_dir)), "qc_talking.json")
+    if not os.path.exists(qc_path):
+        return False, None
+    try:
+        qc = json.load(open(qc_path, encoding="utf-8"))
+    except Exception:
+        return False, None
+    ok = any(s.get("talking") and ((qc.get(s["seg"]) or {}).get("timing") or {}).get("words")
+             for s in segs)
+    return ok, (qc if ok else None)
+
+
+def deliver_final(segs, clips_dir, audio_dir, timing, full, out, bgm=None, bgm_vol=0.15,
+                  subs="auto"):
     if not os.path.exists(full):
         sys.exit(f"[deliver] 找不到成片 {full} — 先跑 assemble.py")
     seg_starts, t = {}, 0.0
@@ -243,6 +299,34 @@ def deliver_final(segs, clips_dir, audio_dir, timing, full, out, bgm=None, bgm_v
     entries = build_entries(segs, seg_starts, timing)
     srt = os.path.splitext(out)[0] + ".srt"
     write_srt(entries, srt)
+
+    # ── 字幕引擎选择:--subs karaoke|drawtext|auto(默认 auto:有词窗就 karaoke)。
+    #    卡拉OK路径(subs_karaoke)治 drawtext 两毛病:同一时间窗多条目叠行、样式死板;
+    #    非 talking 的片(无词窗)照旧走下面的 drawtext,行为零变化。 ──
+    kara_ok, qc = _karaoke_ok(segs, clips_dir)
+    engine = subs if subs != "auto" else ("karaoke" if kara_ok else "drawtext")
+    if engine == "karaoke" and not kara_ok:
+        print("[deliver][WARN] --subs karaoke 但无 talking 词窗(segments 无 talking 段"
+              " 或 qc_talking.json 缺 timing.words),回落 drawtext")
+        engine = "drawtext"
+
+    if engine == "karaoke":
+        import subs_karaoke
+        kara_out = out
+        if bgm:  # 先烧字幕后混 BGM(两趟 ffmpeg;BGM 混音滤镜与旧路径同款)
+            import tempfile
+            kara_out = os.path.join(tempfile.mkdtemp(prefix="deliver_kara_"), "kara.mp4")
+        subs_karaoke.run(full, segs, qc, kara_out)
+        if bgm:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", kara_out, "-stream_loop", "-1", "-i", bgm,
+                 "-filter_complex",
+                 f"[1:a]volume={bgm_vol}[b];[0:a][b]amix=inputs=2:duration=first[a]",
+                 "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-shortest",
+                 out, "-loglevel", "error"], check=True)
+        print(f"[deliver] 成品 → {out}  {dur(out):.1f}s(卡拉OK逐词字幕"
+              + (f",BGM音量{bgm_vol}" if bgm else "") + ")")
+        return
 
     style = ("FontName=Microsoft YaHei,FontSize=13,Bold=1,PrimaryColour=&HFFFFFF,"
              "OutlineColour=&H000000,Outline=1.2,MarginV=42")
@@ -285,11 +369,49 @@ if __name__ == "__main__":
     ap.add_argument("--out", default=None, help="成品输出,默认 <full>_成品.mp4")
     ap.add_argument("--bgm", default=None)
     ap.add_argument("--bgm-vol", type=float, default=0.15)
+    ap.add_argument("--subs", choices=["auto", "karaoke", "drawtext"], default="auto",
+                    help="final 字幕引擎:auto=有 talking 词窗走卡拉OK(subs_karaoke),"
+                         "否则照旧 drawtext;非 talking 的片任何取值都走 drawtext")
     a = ap.parse_args()
 
     segs = json.load(open(a.plan))
     tj = os.path.join(a.audio_dir, "timing.json") if a.audio_dir else ""
     timing = json.load(open(tj)) if tj and os.path.exists(tj) else None
+    # ★talking 段没有 TTS timing:字幕轴取 qc_talking.json 的 ASR 实测语音窗
+    #   (09-21 实撞:没喂的话字幕按字数均摊,talking 有句间停顿必错位)
+    try:
+        _qc = json.load(open(os.path.join(os.path.dirname(os.path.abspath(a.clips)),
+                                          "qc_talking.json"), encoding="utf-8"))
+        n_t = 0
+        for s in segs:
+            if not s.get("talking"):
+                continue
+            t_ = (_qc.get(s["seg"]) or {}).get("timing") or {}
+            if not (t_.get("text") and t_.get("dur")):
+                continue
+            # ★逐句真实窗(09-21):词级窗按句分组 → 每句带绝对 start,
+            #   句间停顿不再被均摊吞掉( hypit 词级对齐的正主用法)
+            words = t_.get("words") or []
+            sents = sentences(dualtext.display(t_["text"]))
+            lines, wi = [], 0
+            _PUNCT = set(",.;:?!,.;:?!、 \t")
+            for x in sents:
+                n = max(1, sum(1 for ch in x if ch not in _PUNCT))
+                grp = words[wi:wi + n]
+                wi += n
+                if grp:
+                    st, en = float(grp[0][1]), float(grp[-1][2])
+                    lines.append({"text": x, "start": round(st, 3),
+                                  "dur": round(max(en - st, 0.25), 3)})
+                else:   # 词窗耗尽(不应发生)→ 退化为该行无 start,累积平铺
+                    lines.append({"text": x, "dur": float(t_["dur"])})
+            timing = timing or {}
+            timing[s["seg"]] = lines if lines else {"text": t_["text"], "dur": float(t_["dur"])}
+            n_t += 1
+        if n_t:
+            print(f"[deliver] talking 段字幕轴: qc_talking 实测语音窗 × {n_t}")
+    except FileNotFoundError:
+        pass
     print(f"[deliver] 字幕时间轴: {'timing.json 精确' if timing else '字数占比粗对齐(无 timing.json)'}")
 
     if a.mode in ("draft", "both"):
@@ -305,4 +427,4 @@ if __name__ == "__main__":
     if a.mode in ("final", "both"):
         out = a.out or (os.path.splitext(a.full)[0] + "_成品.mp4")
         deliver_final(segs, a.clips, a.audio_dir, timing, a.full, out,
-                      bgm=a.bgm, bgm_vol=a.bgm_vol)
+                      bgm=a.bgm, bgm_vol=a.bgm_vol, subs=a.subs)

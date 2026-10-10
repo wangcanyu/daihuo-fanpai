@@ -289,6 +289,34 @@ python3 gen_segments.py run/segments.json …                  # 即梦自动带
 - 花字/字幕不用遮:平面文字在深度图里自动消失。参考要 `-an`(脚本已做)。
 - 出完先抽帧看一眼:脸、衣服纹理应完全看不出。头发外轮廓会残留一点,发型可能轻微被带。
 
+## H3 音画同出(talking)+ 内嵌音轨装配(Kimi 线 09-21 实证,10-10 合入)
+
+**口型漂移的真相:病在装配簿记,不在模型。** SyncNet(±40ms 标定)批量测过:两条后端生成时音画都对齐(≤0.04s)。
+模型开口有约 0.1-0.3s 的 lead-in,后端会把输入音频**按口型对齐后的位置**嵌回 clip;旧装配却拿原始 wav 铺在段首,
+把 lead-in 又放了出来(C 海参 S1 实测 +0.275s)。**现在 `assemble` / `deliver` 草稿的段配音一律取 clip 内嵌音轨**
+(该段喂过音频、或是 talking 段,且 clip 带音轨时),修复后 +0.04s。没喂音频的段照旧铺 wav 或静音。
+
+**talking 模式 = 台词写进 H3 提示词,不给参考音频,让 H3 自己开口。** 同步和情绪是生成自带的,逐字 3/3、价格机制词一次过审。
+和现行的 TTS 加音频驱动链**按片二选一**:要品牌声(TTS 克隆)走旧链,要同步和情绪走 talking。
+```
+# 段级 "talking": true(逐段),或 h3_prompt --talking(全片,段级标记优先)
+python3 h3_prompt.py run/segments.json --shotlist … --assets … --talking
+python3 gen_segments.py run/segments.json --clips run/clips --mm-backend mmh3   # talking 段自动不带音频、按字数估时长(3.4 字/秒)
+python3 qc_talking.py run/segments.json --clips run/clips    # 逐字率 ≥85% + SyncNet ≤2 帧且 conf≥3;产出 qc_talking.json(含词级窗)
+python3 assemble.py run/segments.json --clips run/clips --out FULL.mp4 --trim-to-plan   # talking 段按实测语音尾 +0.35s 裁
+python3 deliver.py run/segments.json --clips run/clips --full FULL.mp4 --mode final --trim-to-plan   # 有词窗自动走逐词卡拉OK字幕
+```
+- **只走 H3(mmh3)**。即梦的口播段要音频驱动,不支持这个模式。
+- **说话人**:有演职表时,台词按 speaker 标注挂到具体 `<Subject N>`,标注缺失时退回"画面中央"的启发式。
+  旁白镜写成画外旁白说、画面里的人闭嘴;都判不出就用中性措辞,不猜性别。(Kimi 原版恒写 "She",10-10 合入时修)
+- **语气**:`assets.json` 的 `tone_map`(镜号或段名)> 段级 `"tone"` > 缺省"直播带货高能量"。剧情片要自己写 tone,缺省语气不合适。
+- talking 段带 `speech_turns` 时,口型时间轴会被丢弃并报警(时间轴的措辞全以 `<Audio 1>` 为前提)。
+- **QC FAIL 定向重抽**:`DAIHUO_NO_REUSE` 在本地没有意义。本地片库从不自动复用,只在账本里提示。
+- **SyncNet 是可选的**(`config.lip_python()` / `syncnet_home()`,见 `qc_sync_offset.py` 文件头)。没装时口型一项记"未测",只凭逐字率判,并报警请人眼抽看。
+  Kimi 原版在没装时判 FAIL,会让逐字 100% 的段也 FAIL。
+- 繁简表要逐次补:新声源可能转出新的繁体字(`帶/凍` 就是 talking 首跑补的),否则会出假 replacement。
+- 实验脚本在 `experiments/`(路径是 Kimi 机器上的,只当证据和措辞参考)。
+
 ## 台本层 + 段状态账本(10-09 合 Kimi 线时立的两块地基)
 
 **台词只写一份,下游只拿投影(`dualtext.py`)。** shotlist / segments 的 `dialogue` 是唯一源头:
@@ -529,6 +557,13 @@ python3 run_state.py run/clips reuse S3 --key <key>         # 显式复用片库
   参考只截生成需要的那几秒(`depth_ref` 按段时长截)。
 - **无台词的人物段不再写"台词{}@音频1…口型同步"**(10-09 修):`seg_role` 为拿主播锚图会把无台词人物段
   路由进口播,旧版照写对口型指令,模型会自己编嘴型。
+- **★口型漂移 = 装配簿记病(Kimi 线 09-21,SyncNet 实证)**:后端已把输入音频按口型位置嵌回 clip,拿原始 wav 铺段首会把 lead-in 再放一遍(+0.275s)。
+  装配和草稿已改取内嵌音轨。**别再手动在剪映里挪音轨**,先查是不是用了外部 wav。
+- **★talking 段裁剪按语音尾,不按 span(Kimi 线 09-21)**:模型语速比估算慢,按 span 裁 6/6 段都被截尾。
+  所以按 `qc_talking.json` 的实测语音尾 +0.35s 裁;时长按 3.4 字/秒估(原来 4.2 偏快)。
+- **★卡拉OK字幕起点按裁剪后的口径算**:旧 drawtext 版按未裁剪 clip 时长累加段起点,字幕滞后约 2.5s。`subs_karaoke` 按裁剪后的口径算,
+  所以 assemble 和 deliver 必须都带 `--trim-to-plan`(不带会报"推算总长 vs 成片差 Xs")。
+- **C 模式台词要说"卡片主播的话"(Kimi 线 09-21)**:"伴你购物无忧"这类通用营销腔被判"像机器人",`c_gen` 已列黑名单。
 - **可灵(Kling)第四条腿已接**:独立skill `kling-cli`(非本engine脚本),定位=高质量首帧i2v备选——脸稳定性最强、无水印,但无视频参考、时长仅5/10s(15s=尾帧续段拼)、审核严(露肤服饰措辞写"典雅庄重")、人数硬约束同样必加、全链路依赖代理。计费/脾性见记忆 kling-cli-setup。
 
 

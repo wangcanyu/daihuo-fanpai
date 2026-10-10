@@ -268,6 +268,32 @@ def depth_python():
     return _sys.executable
 
 
+def lip_python():
+    """SyncNet 口型偏移探针(qc_sync_offset / qc_talking)用的解释器:要 torch + mediapipe + python_speech_features。
+    DAIHUO_LIP_PYTHON > ~/.venvs/lip > D:/tools/venv-lip(Kimi 线 Windows 机)> 当前解释器。"""
+    env = os.environ.get("DAIHUO_LIP_PYTHON")
+    if env:
+        return env
+    for p in (os.path.expanduser("~/.venvs/lip/bin/python"),
+              os.path.expanduser("~/.venvs/lip/Scripts/python.exe"),
+              "D:/tools/venv-lip/Scripts/python.exe"):
+        if os.path.exists(p):
+            return p
+    return _sys.executable
+
+
+def syncnet_home():
+    """SyncNet 资源目录:内含 syncnet_v2.model 权重 + syncnet_python 包。
+    DAIHUO_SYNCNET_HOME > ~/.cache/daihuo/syncnet > D:/复刻测试/qc_tmp/syncnet(Kimi 线)。"""
+    env = os.environ.get("DAIHUO_SYNCNET_HOME")
+    if env:
+        return env
+    for p in (os.path.expanduser("~/.cache/daihuo/syncnet"), "D:/复刻测试/qc_tmp/syncnet"):
+        if os.path.isdir(p):
+            return p
+    return os.path.expanduser("~/.cache/daihuo/syncnet")
+
+
 def cjk_font():
     """PIL 拼图用的中文字体:微软雅黑(Windows 或 WSL 挂载)> 文泉驿 > 报错。"""
     for p in (os.environ.get("DAIHUO_CJK_FONT"), "C:/Windows/Fonts/msyh.ttc",
