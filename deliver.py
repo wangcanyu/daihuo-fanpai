@@ -28,7 +28,7 @@ draft 模式若当前解释器缺该库,自动用 DAIHUO_JY_PYTHON(默认 ~/.ven
 
 用法:
   python3 deliver.py segments.json --mode draft --drafts-dir "D:\\jianying\\JianyingPro Drafts" --name 我的项目
-  python3 deliver.py segments.json --mode final --full output/FULL.mp4 [--bgm x.mp3]
+  python3 deliver.py segments.json --mode final --full 成片/FULL.mp4 [--bgm x.mp3]
 """
 import argparse, json, os, re, shutil, subprocess, sys
 import dualtext  # 台本层:台词投影(display 上屏 / speech 是念的)
@@ -365,7 +365,7 @@ if __name__ == "__main__":
                          "★后端有最短时长下限(即梦4s/海螺h3 5s)时必开,否则视频轨比字幕轨长、两轨对不上")
     ap.add_argument("--size", default="720x1280", help="草稿画布,2K素材用 1440x2560")
     # final
-    ap.add_argument("--full", default="output/FULL.mp4", help="assemble 产出的成片")
+    ap.add_argument("--full", default="成片/FULL.mp4", help="assemble 产出的成片")
     ap.add_argument("--out", default=None, help="成品输出,默认 <full>_成品.mp4")
     ap.add_argument("--bgm", default=None)
     ap.add_argument("--bgm-vol", type=float, default=0.15)
@@ -373,6 +373,7 @@ if __name__ == "__main__":
                     help="final 字幕引擎:auto=有 talking 词窗走卡拉OK(subs_karaoke),"
                          "否则照旧 drawtext;非 talking 的片任何取值都走 drawtext")
     a = ap.parse_args()
+    __import__("config").guard_args(a, "deliver")   # 输出不许落进 skill 目录(project.py init 建项目文件夹)
 
     segs = json.load(open(a.plan))
     tj = os.path.join(a.audio_dir, "timing.json") if a.audio_dir else ""

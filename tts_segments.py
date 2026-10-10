@@ -137,6 +137,7 @@ if __name__ == "__main__":
     ap.add_argument("--pron-profile", choices=["auto", "haishen", "off"], default="auto",
                     help="参→身修正: auto=台词含'海参'才启用 | haishen=强制 | off=只用自定义词表")
     a = ap.parse_args()
+    __import__("config").guard_args(a, "tts_segments")   # 输出不许落进 skill 目录(project.py init 建项目文件夹)
     voices = {"B": {"ref": a.voice_ref, "ref_text": a.voice_ref_text},
               "A": {"ref": a.voice_a, "ref_text": a.voice_a_text}}
     synth(a.plan, a.out_dir, voices, a.instruct, a.pron_fix, pron_profile=a.pron_profile)

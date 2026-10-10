@@ -7,7 +7,7 @@
 
 用法: python3 card_harvest.py <run目录> --video <原片路径> --card-id shaokao-liaoba \
         --type tutorial_demo --category 食品 --price-band 9.9 [--source 自产链接或作者]
-run 目录里要有: shotlist.json(须跑过 beat_tag --apply) + output/FULL.judge.json(可选)
+run 目录里要有: shotlist.json(须跑过 beat_tag --apply) + 成片/FULL.judge.json(可选,老项目 output/)
 产物: <skill>/punch_cards/<card-id>.json
 """
 import argparse, json, os, sys
@@ -40,7 +40,9 @@ def main():
     a = ap.parse_args()
 
     sl = shotlist.read(os.path.join(a.run, "shotlist.json"))
-    judge_p = os.path.join(a.run, "output", "FULL.judge.json")
+    judge_p = os.path.join(a.run, "成片", "FULL.judge.json")       # 10-10 起成片在 成片/
+    if not os.path.exists(judge_p):
+        judge_p = os.path.join(a.run, "output", "FULL.judge.json")  # 老项目
     judge = json.load(open(judge_p, encoding="utf-8")) if os.path.exists(judge_p) else None
 
     beats = []

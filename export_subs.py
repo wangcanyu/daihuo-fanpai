@@ -9,7 +9,7 @@ export_subs.py — 导出字幕 SRT + 屏上贴字清单(后期剪映直接照�
 说明:即梦生成阶段已被要求"保持无字幕"(它自加的字幕常有错别字),字幕一律后期加——
 这份 SRT 用的是 segments.json 里的【正字台词】(读音修正只影响配音文本,不影响这里)。
 
-用法: python3 export_subs.py run/segments.json [--shotlist run/shotlist.json] [--out run/output/FULL]
+用法: python3 export_subs.py run/segments.json [--shotlist run/shotlist.json] [--out run/成片/FULL]
 """
 import argparse, json, os, re
 import dualtext  # 台本层:台词投影(display 上屏 / speech 是念的)

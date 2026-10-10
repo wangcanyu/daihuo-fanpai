@@ -1169,6 +1169,7 @@ def main():
                     help="★全片走音画同出:不给参考音频,台词写进 SHOT 描述让 H3 自己开口。"
                          "segments.json 段级 \"talking\": true/false 优先于本开关")
     a = ap.parse_args()
+    __import__("config").guard_args(a, "h3_prompt")   # 输出不许落进 skill 目录(project.py init 建项目文件夹)
 
     segs = json.load(open(a.plan))
     segs_raw = json.loads(json.dumps(segs))   # 深拷贝,用于 .bak_h3 备份

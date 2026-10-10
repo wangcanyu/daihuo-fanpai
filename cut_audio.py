@@ -18,6 +18,7 @@ def main():
     ap.add_argument("--shotlist", required=True)
     ap.add_argument("--out", default="audio/seg")
     args = ap.parse_args()
+    __import__("config").guard_args(args, "cut_audio")   # 输出不许落进 skill 目录(project.py init 建项目文件夹)
 
     d = json.load(open(args.plan))
     segs = d["segments"] if isinstance(d, dict) else d

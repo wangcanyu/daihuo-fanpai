@@ -189,7 +189,7 @@ if __name__ == "__main__":
     ap.add_argument("plan")
     ap.add_argument("--clips", default="./clips")
     ap.add_argument("--audio-dir", default="audio/seg")
-    ap.add_argument("--out", default="output/FULL.mp4")
+    ap.add_argument("--out", default="成片/FULL.mp4")
     ap.add_argument("--trim-to-plan", action="store_true",
                     help="把每段画面裁回 segments.json 的 end-start 跨度(不短于本段配音)"
                          "——治各后端多送尾帧导致的段尾空窗与全片被撑长")
@@ -200,6 +200,7 @@ if __name__ == "__main__":
                     help="输出画幅,默认720x1280。★后端出2K素材时别用默认值(会被压回720p白花钱),"
                          "9:16的2K用 1440x2560、1080P用 1080x1920")
     a = ap.parse_args()
+    __import__("config").guard_args(a, "assemble")   # 输出不许落进 skill 目录(project.py init 建项目文件夹)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     if a.master_audio and not a.trim_to_plan:
         print("[assemble][提示] --master-audio 建议与 --trim-to-plan 同用,否则画面比原音长会错位")

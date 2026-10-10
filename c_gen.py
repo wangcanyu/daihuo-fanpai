@@ -379,6 +379,7 @@ def main():
     ap.add_argument("--facts", help="可选:产品事实补充文本文件路径(卖点/配料/禁忌等)")
     ap.add_argument("--out", required=True, help="输出 shotlist.json 路径")
     a = ap.parse_args()
+    __import__("config").guard_args(a, "c_gen")   # 输出不许落进 skill 目录(project.py init 建项目文件夹)
 
     cfg = load_assets(a.assets)            # ★@引用只在入口解一次
     facts = open(a.facts, encoding="utf-8").read().strip() if a.facts else ""

@@ -72,6 +72,22 @@ python3 <engine>/doctor.py
 
 核心链路(反推+生成+装配)可跑即可开工;配音缺则走上面降级。
 
+## 第0.5步:建项目文件夹(10-10,硬规则)
+
+**每条复刻一个项目文件夹,所有中间产物都进去;skill 目录里一个字节都不许写。**
+```bash
+python3 <engine>/project.py init "G:\复刻测试\男装.mp4"          # 默认建在视频旁边:G:\复刻测试\男装_复刻\
+python3 <engine>/project.py init 目标.mp4 --dir "用户指定的位置"   # 用户说了放哪就放哪
+python3 <engine>/project.py init --dir "用户指定的位置" --name 西梅早餐   # C 模式没有视频:先问用户放哪
+```
+- 最后一行打印 `RUN=<项目路径>`。**下文所有 `run/` 都指这个路径**,cd 进去再跑。
+- 项目里机器用的子目录沿用英文名(clips/ audio/seg/ prompts/ refs/ assets/ tmp/);**人只看 `成片/`**,
+  FULL.mp4 / 成品 / 字幕 / 评委报告都输出到这里。跟用户报告时给 Windows 路径(`project.py` 已打印)。
+- 目标视频会复制到 `src/target.mp4`,原片挪走或改名不影响项目。
+- 14 个入口脚本带守卫:输出路径落进 skill 目录直接拒绝。**被拒了就去建项目,别绕守卫。**
+- 临时文件(抽帧、测试切片)放 `run/tmp/`,不放 skill 目录,也不放系统 /tmp(用户找不到)。
+- 老项目(`E:\jimeng\runs\*`)照旧能用,结构兼容;只是成片在 `output/` 而不是 `成片/`。
+
 ## 输入(问用户要)
 
 1. **目标视频**(要复刻的爆款,路径)
@@ -234,16 +250,16 @@ python3 <engine>/doctor.py
         → ★用 h3 腿前先读 `references/h3/README.md`:**审查只审prompt文本不审图/音→台词一律不进prompt**、产物多送0.5s尾帧、结果URL只活24h、Ref2VA六段式提示词与 [Shot N] At MM:SS.mmm 段内调度。
         → ⚠小云雀腿 07-17 实测(mini_lite档):i2v 是**参考重绘语义**非首帧锚定——构图/质感优,但**品牌文字会绘错**且左上角烧死「AI生成」水印→**只接无文字要求的氛围/质感镜**,带包装文字的镜必须即梦。xyq_gen.submit_mm(带--audio口播)仍是实验性。
         → ★用小云雀腿前先读 `references/xyq_notes.md`:与即梦声音范式根本不同(台词/音效写进prompt模型自生语音 vs 即梦wav驱动口型)、prompt黄金公式、实测记录与分工定位。
-5 装配  python3 assemble.py run/segments.json --clips run/clips --audio-dir run/audio/seg --out run/output/FULL.mp4 [--trim-to-plan] [--master-audio 原片.mp4] [--size 1440x2560]
+5 装配  python3 assemble.py run/segments.json --clips run/clips --audio-dir run/audio/seg --out run/成片/FULL.mp4 [--trim-to-plan] [--master-audio 原片.mp4] [--size 1440x2560]
         → ★A模式复用原音的正解 = `--trim-to-plan --master-audio 原片.mp4`:先把每段画面裁回
           segments.json 的 end-start 跨度(但不短于本段配音),再整条原音直铺。
           不裁则全片被撑长(plan 的 duration=ceil(end-start) 本就多到1s,海螺还多送0.5s尾帧),
           段尾出现"音已停画还在演"的空窗;逐段拼音轨还会把误差累加成漂移。
           装配后会硬校验画面总长 vs 原音,差>0.3s 报警(有缺片时别用 --master-audio)。
-6 评委  python3 judge.py run/output/FULL.mp4 [--target 原片.mp4]
+6 评委  python3 judge.py run/成片/FULL.mp4 [--target 原片.mp4]
         → Seed2.1Pro 按三看漏斗90分制打分+整改建议;--target 时成片+原片一起上传做真保真度对比
         → 成片>35MB 自动压 360p 小版上传(base64 上限)
-7 字幕  python3 export_subs.py run/segments.json --shotlist run/shotlist.json --out run/output/FULL
+7 字幕  python3 export_subs.py run/segments.json --shotlist run/shotlist.json --out run/成片/FULL
         → FULL.srt(句级粗对齐字幕)+ FULL_贴字清单.md(原片屏上贴字的时间点+原文)——剪映照抄
 8 交付  python3 deliver.py run/segments.json --mode draft|final|both --clips run/clips --audio-dir run/audio/seg --shotlist run/shotlist.json [--trim-to-plan --size 1440x2560]
         → ★装配开了 --trim-to-plan 的话交付也必须开,口径要一致:否则视频轨用未裁的原始clips

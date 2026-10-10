@@ -85,6 +85,7 @@ def main():
     ap.add_argument("--alt-name", default="K3")
     ap.add_argument("--max-frames", type=int, default=80)
     a = ap.parse_args()
+    __import__("config").guard_args(a, "merge_reverse")   # 输出不许落进 skill 目录(project.py init 建项目文件夹)
 
     seed = json.load(open(a.seed_json))
     alt = json.load(open(a.alt_json))

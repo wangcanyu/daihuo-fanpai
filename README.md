@@ -85,10 +85,11 @@
 
 每一步只通过 JSON 文件/文件夹交接,**可插拔**——换反推 VLM、换视频模型、换 TTS,只改对应一个脚本(契约见 `DESIGN.md`)。
 
-## 引擎脚本(49)
+## 引擎脚本(50)
 
 | 脚本 | 作用 |
 |---|---|
+| `project.py` | **建项目文件夹**:默认建在目标视频旁边(`<视频名>_复刻/`),也可指定位置;成片统一进 `成片/`。入口脚本有守卫,输出落进 skill 目录直接拒绝 |
 | `doctor.py` | 环境体检(依赖分级:轻依赖可自动装/凭证与重型依赖提示用户) |
 | `seed_reverse.py` | 反推:原生视频 → 结构化分镜表(硬切/台词/product_role/host_on_camera/关键颜色) |
 | `k3_reverse.py` | 双反推第二腿(Kimi K3,同 SCHEMA 同切点源):运镜时间轴强,实体描述必须帧验 |
@@ -165,14 +166,15 @@ cd ~/.claude/skills/daihuo-fanpai && python3 doctor.py
 
 ```bash
 python3 doctor.py                                   # 0 体检:告诉你缺什么、怎么补
+python3 project.py init 目标.mp4                    # 建项目文件夹(默认在视频旁边 目标_复刻/),下面的 run/ 就是它
 python3 seed_reverse.py 目标.mp4 --out run/shotlist.json
 python3 needed_assets.py run/shotlist.json          # 按清单准备产品图 → 填 assets.json
 python3 plan_segments.py run/shotlist.json assets.json --out run/segments.json   # ★人审 run/segments.md
 python3 tts_segments.py run/segments.json --out-dir run/audio/seg
 python3 gen_segments.py run/segments.json --clips run/clips --audio-dir run/audio/seg [--i2v-backend ark]
-python3 assemble.py run/segments.json --clips run/clips --audio-dir run/audio/seg --out run/output/FULL.mp4
-python3 judge.py run/output/FULL.mp4 --target 目标.mp4
-python3 export_subs.py run/segments.json --shotlist run/shotlist.json --out run/output/FULL
+python3 assemble.py run/segments.json --clips run/clips --audio-dir run/audio/seg --out run/成片/FULL.mp4
+python3 judge.py run/成片/FULL.mp4 --target 目标.mp4
+python3 export_subs.py run/segments.json --shotlist run/shotlist.json --out run/成片/FULL
 python3 deliver.py run/segments.json --mode both --clips run/clips --audio-dir run/audio/seg \
         --shotlist run/shotlist.json --name 我的项目   # 剪映草稿箱直接出现,进去就能剪
 ```
@@ -336,6 +338,10 @@ B 模式的台词本地化依赖 `qianchuan/` 千川方法论弹药包(选题/�
 - **合规自负**:食品别写疗效、不编明星背书、活动/价格须真实。
 
 ## 更新日志
+
+### 2026-10-10(之二) · 项目文件夹:中间产物不再进 skill 目录
+- `project.py init 目标.mp4`:每条复刻一个文件夹,默认建在目标视频旁边,也可指定位置;成片统一放 `成片/`。
+- 14 个入口脚本加守卫:输出路径落进 skill 目录就拒绝。起因是 skill 装在 C 盘的机器被中间产物撑满,想看的片也找不到。
 
 ### 2026-10-10 · 合入 Kimi 线 09-21:H3 音画同出 + 口型漂移根治 + 卡拉OK字幕
 - **口型漂移的根因在装配**:SyncNet 测出两条后端生成时音画都对齐(≤0.04s)。漂移来自装配拿原始 wav 铺段首,把模型的 lead-in 又放了出来。

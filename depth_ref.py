@@ -179,6 +179,7 @@ def main():
     ap.add_argument("--ss", type=float)
     ap.add_argument("--t", type=float)
     a = ap.parse_args()
+    __import__("config").guard_args(a, "depth_ref")   # 输出不许落进 skill 目录(project.py init 建项目文件夹)
     if a.segments:
         for_segments(a.segments, a.video)
     else:

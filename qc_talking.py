@@ -196,6 +196,7 @@ def main():
                     help="锚点 low_conf 阈值(默认 0.35)")
     ap.add_argument("--only", default=None, help="逗号分隔段名,如 S2")
     a = ap.parse_args()
+    __import__("config").guard_args(a, "qc_talking")   # 输出不许落进 skill 目录(project.py init 建项目文件夹)
 
     segs = json.load(open(a.segments, encoding="utf-8"))
     only = set(a.only.split(",")) if a.only else None

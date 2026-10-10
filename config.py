@@ -8,7 +8,7 @@ Ark API key 读取优先级:
   3) 文件 ~/.hermes/ark_key.txt(本地遗留兼容,公开项目不依赖)
 CosyVoice 位置:环境变量 COSYVOICE_HOME,默认 ~/CosyVoice
 """
-import os
+import os, re
 
 
 # ★火山有两条计费口子,端点【不同】,key 也【不通用】(08-22 实测 401):
@@ -292,6 +292,47 @@ def syncnet_home():
         if os.path.isdir(p):
             return p
     return os.path.expanduser("~/.cache/daihuo/syncnet")
+
+
+# ── 项目文件夹(10-10):中间产物一律进项目文件夹,绝不进 skill 目录 ──────────────
+SKILL_DIR = os.path.dirname(os.path.realpath(__file__))
+
+
+def to_local_path(p):
+    """Windows 路径 → 本机可用路径。WSL 下 G:\\a\\b.mp4 → /mnt/g/a/b.mp4;原生 Windows/Linux 原样返回。"""
+    if not p:
+        return p
+    p = str(p)
+    m = re.match(r"^([A-Za-z]):[\\/](.*)$", p)
+    if m and os.name != "nt" and os.path.isdir("/mnt/" + m.group(1).lower()):
+        return "/mnt/" + m.group(1).lower() + "/" + m.group(2).replace("\\", "/")
+    return p
+
+
+def to_win_path(p):
+    """/mnt/g/a/b → G:\\a\\b(给人看、给 Windows 资源管理器用);非 /mnt/x 路径原样返回。"""
+    m = re.match(r"^/mnt/([a-z])/(.*)$", os.path.abspath(p))
+    return f"{m.group(1).upper()}:\\" + m.group(2).replace("/", "\\") if m else os.path.abspath(p)
+
+
+def inside_skill(p):
+    rp = os.path.realpath(os.path.abspath(to_local_path(p)))
+    return rp == SKILL_DIR or rp.startswith(SKILL_DIR + os.sep)
+
+
+_OUT_ARG = re.compile(r"(^|_)(out|outdir|out_dir|dir|clips|full|workdir|run)($|_)")
+
+
+def guard_args(ns, who=""):
+    """入口脚本 parse_args() 后调用:任何输出类参数(out/out_dir/clips/audio_dir/full…)解析后落在
+    skill 目录里就拒绝。★为什么:SKILL.md 的命令全是 run/xxx 相对路径,agent 在 skill 目录里干活时
+    中间产物会全堆进 skill 目录(另一台机器 C 盘就是这么被撑满的)。项目文件夹用 project.py init 建。"""
+    bad = [f"--{k.replace('_', '-')} {v}" for k, v in vars(ns).items()
+           if isinstance(v, str) and v and _OUT_ARG.search(k) and inside_skill(v)]
+    if bad:
+        raise SystemExit(f"[{who or 'daihuo'}] 输出路径落在 skill 目录里,拒绝:{'; '.join(bad)}\n"
+                         f"  → 先建项目文件夹:python3 {os.path.join(SKILL_DIR, 'project.py')} init <目标视频>"
+                         f"(默认建在视频旁边 <视频名>_复刻/),在那里面跑。")
 
 
 def cjk_font():

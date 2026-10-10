@@ -593,6 +593,7 @@ if __name__ == "__main__":
                     help="深度动作参考:off(默认)/ suggested(开启所有'建议'段)/ S1,S3(点名)。"
                          "★成本翻倍,先把规划打印的建议转述给用户,同意后再开")
     a = ap.parse_args()
+    __import__("config").guard_args(a, "plan_segments")   # 输出不许落进 skill 目录(project.py init 建项目文件夹)
     out = a.out or os.path.join(os.path.dirname(a.shotlist), "segments.json")
     plan(a.shotlist, a.assets, out, a.max_cuts, a.min_dur, a.hard_max_cuts, a.by_leg, a.hero_strict,
          a.motion_ref)

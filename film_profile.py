@@ -111,6 +111,7 @@ def main():
     ap.add_argument("--out", default="profile.json")
     ap.add_argument("--scale", type=int, default=360)
     a = ap.parse_args()
+    __import__("config").guard_args(a, "film_profile")   # 输出不许落进 skill 目录(project.py init 建项目文件夹)
 
     run = os.path.dirname(os.path.abspath(a.shotlist))
     shots = _shotlist.read(a.shotlist)["shots"]

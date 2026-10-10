@@ -409,6 +409,7 @@ if __name__ == "__main__":
     ap.add_argument("--no-audio", action="store_true")
     ap.add_argument("--timeout", type=int, default=600)
     a = ap.parse_args()
+    __import__("config").guard_args(a, "seed_reverse")   # 输出不许落进 skill 目录(project.py init 建项目文件夹)
     cuts = [float(x) for x in a.cuts.split(",")] if a.cuts else None
     d = reverse(a.video, a.out, cuts, a.scene_thresh, a.scale, not a.no_cut_probe,
                 not a.no_audio, a.timeout)

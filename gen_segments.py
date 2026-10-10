@@ -497,6 +497,7 @@ if __name__ == "__main__":
                          "package_text→mmh3 / hero_real→即梦2.0vip / 人审标 jimeng25→2.5")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
+    __import__("config").guard_args(a, "gen_segments")   # 输出不许落进 skill 目录(project.py init 建项目文件夹)
     only = set(a.only.split(",")) if a.only else None
     run(a.plan, a.clips, a.audio_dir, only, a.dry_run, a.i2v_backend, a.mm_backend,
         a.jimeng_model, a.jimeng_res, a.concurrency, a.alt_res, a.auto_leg)
