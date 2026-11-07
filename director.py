@@ -64,6 +64,21 @@ AUTH_KW = ("白大褂", "实验室", "研究院", "研究所", "专家", "教授
            "professor", "certificate", "certification", "patent", "clinical", "institute")
 
 
+# ★11-05 接入 seedance-prompt skill:规则按模型线分流。2.0 官方只认镜头序号,2.5 认整数秒,H3 有自己的时间写法。
+SECONDS_RE = re.compile(r"\d{1,2}\s*(?:s|秒)?\s*[-–—~到至]\s*\d{1,2}\s*(?:s\b|sec|seconds|秒)", re.I)
+
+
+def _is_sd20(seg, is_h3):
+    """即梦 2.0 段。超过 15 秒的段 2.0 生成不了,按 2.5 算(--jimeng-model 全局切 2.5 时靠这条兜一部分)。"""
+    return (not is_h3 and seg.get("leg") in (None, "jimeng", "libtv")
+            and float(seg.get("duration") or 0) <= 15)
+
+
+def _latin_dialogue(seg, shots):
+    t = (seg.get("dialogue") or "") + "".join((s.get("dialogue") or "") for s in shots)
+    return bool(t.strip()) and sum(c.isascii() and c.isalpha() for c in t) > len(t) * 0.5
+
+
 RULES = [
     dict(
         id="cast_count", name="人数硬约束",
@@ -106,10 +121,36 @@ RULES = [
         id="beat_timing", name="节拍时间分配",
         why="08-11 锦鲤快快游 27 秒一镜到底:只给动作顺序不给时长 → 模型平均用力,"
             "搅拌咖啡杯那段占了过长",
+        not_sd20=True,      # 2.0 官方:写秒数不稳定,走下面的 sd20_beat_order
         applies_when=lambda seg, shots: (len(shots) <= 1 and float(seg.get("duration", 0)) >= 10),
         present_kw=["秒:", "秒 :", "0-", "At 00:", "seconds:", "s:"],
         fix="加逐段时间轴:『0-6秒做A(这一段要快,6秒内完成) / 6-12秒做B / 12-18秒做C…』"
             "——一次生成长片时模型不知道每个动作该占多久",
+    ),
+    dict(
+        id="sd20_beat_order", name="2.0 长段用镜头顺序分配节拍",
+        why="11-05 火山官方 sd2-pe:2.0 按镜头序号走,不写秒数。beat_timing 的时间轴写法只适用 2.5/H3",
+        sd20_only=True,
+        applies_when=lambda seg, shots: (len(shots) <= 1 and float(seg.get("duration", 0)) >= 10),
+        present_kw=["镜头1", "镜头 1", "镜头一", "Shot 1", "随后", "接着", "然后", "then "],
+        fix="按发生顺序拆成 镜头1/镜头2/镜头3,要快的动作写『快速』,要慢的写『缓慢』;不写秒数",
+    ),
+    dict(
+        id="sd20_no_seconds", name="2.0 提示词不写秒数",
+        why="11-04 梅奶奶 v2:逐秒排动作 → 人物像提线木偶、台词变画外音。官方 sd2-pe 明确禁写 0-3s",
+        sd20_only=True,
+        applies_when=lambda seg, shots: True,
+        check_seconds=True,
+        fix="改成 镜头1/镜头2/镜头3 按事件顺序写。详见 seedance-prompt skill",
+    ),
+    dict(
+        id="dialogue_language", name="外语台词写明语种",
+        why="11-04 梅奶奶咖啡段:中文克隆音色说英文,没写语种时口齿含糊、混进粤语腔;"
+            "官方 sd25-pe 也要求英语台词写明『使用英语』",
+        not_h3=True,
+        applies_when=_latin_dialogue,
+        present_kw=["english", "英语", "英文"],
+        fix="台词前写 in clear English / 使用英语",
     ),
     dict(
         id="appearance_precedence", name="产品外观优先级归锚图",
@@ -348,6 +389,12 @@ def check_segment(seg, shots, prompt, is_h3=False, ctx=None):
     for r in RULES:
         if r.get("h3_only") and not is_h3:
             continue
+        if r.get("not_h3") and is_h3:
+            continue
+        if r.get("sd20_only") and not _is_sd20(seg, is_h3):
+            continue
+        if r.get("not_sd20") and _is_sd20(seg, is_h3):
+            continue
         # 是否适用
         if r.get("applies_all"):
             applies = all(any(k in src for k in grp) for grp in r["applies_all"])
@@ -396,6 +443,10 @@ def check_segment(seg, shots, prompt, is_h3=False, ctx=None):
                 if wants:
                     out.append((r, f"『{nm}』自相矛盾 —— 禁令:「{bans[0][:46]}…」"
                                    f" ⇄ 却又要求:「{wants[0][:46]}…」"))
+        elif r.get("check_seconds"):              # 查 2.0 提示词里的绝对秒数
+            m = SECONDS_RE.search(p)
+            if m:
+                out.append((r, f"提示词里写了秒数『{m.group(0)}』,2.0 不认"))
         elif r.get("check_len"):                  # 查提示词【长度】,超了提交期才报错,太晚
             n = len(p)
             if n > r["check_len"]:

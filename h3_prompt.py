@@ -716,10 +716,13 @@ def _talking_speech_line(seg, shot, shot_idx, tone_map, roles=(), cast_ids=None)
     tone = (tone_map.get(str(shot.get("shot_id"))) or tone_map.get(seg["seg"])
             or seg.get("tone") or DEFAULT_TALKING_TONE)
     say = f'Mandarin Chinese in {tone}, saying exactly: "{spoken}".'
+    vt = (shot.get("voice_type") or "").strip()      # 反推从声音判的,不是看脸猜的;缺字段时行为不变
     if not roles:
-        return f' She speaks {say} Her lip movement matches her own speech precisely.'
+        sub, pos = {"男": ("He", "His"), "儿童": ("The child", "The child's")}.get(vt, ("She", "Her"))
+        return f' {sub} speaks {say} {pos} lip movement matches {pos.lower()} own speech precisely.'
     if shot.get("voice_mode") == "voiceover":
-        return (f' An off-screen narrator speaks {say} Nobody in frame is saying it: '
+        who = {"男": "male ", "女": "female ", "儿童": "child "}.get(vt, "")
+        return (f' An off-screen {who}narrator speaks {say} Nobody in frame is saying it: '
                 'every character in frame keeps lips together, small nods and natural blinks.')
     nm = shot.get("speaker")
     r = (next((x for x in roles if x["name"] == nm), None) if nm else None) or _frame_lead(shot, roles)

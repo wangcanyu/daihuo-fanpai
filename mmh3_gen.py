@@ -303,7 +303,10 @@ if __name__ == "__main__":
     elif a.audio:
         tid = submit_mm(a.image, a.audio, a.prompt, a.duration, a.resolution)
     elif a.image:
-        tid = submit_i2v(a.image[0], a.prompt, a.duration, a.resolution)
+        # ★10-11:多张参考图(人设+产品)且无音频 = talking/多参考段,必须全部带上;
+        #   旧版恒走 submit_i2v(image[0]) 静默丢掉第 2 张以后的图(紫苏油钩子实撞)
+        tid = (submit_i2v(a.image[0], a.prompt, a.duration, a.resolution) if len(a.image) == 1
+               else submit_mm(a.image, None, a.prompt, a.duration, a.resolution))
     else:
         tid = submit_t2v(a.prompt, a.duration, a.resolution)
     print("task:", tid)

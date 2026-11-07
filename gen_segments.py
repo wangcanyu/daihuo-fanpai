@@ -86,7 +86,12 @@ def submit(seg, audio_dir, model=None, res="720p"):
     #   **向上取整**不是四舍五入:少要一秒 = 画面盖不住规划跨度,装配时被拉伸或留黑;
     #   多要一秒只是多花钱,assemble 会裁掉。宁可多要。
     dur = str(max(4, math.ceil(float(seg["duration"]) - 1e-6)))
-    if t == "mm":
+    if t == "t2v":
+        # 无产品无人物的纯画面段(CG 原理动画/生活空镜):不挂参考图,直接文生视频
+        cmd = [DREAMINA, "text2video", "--prompt", seg["prompt"], "--duration", dur,
+               "--ratio", seg.get("ratio") or "9:16", "--model_version", model,
+               "--video_resolution", res, "--poll", "0"]
+    elif t == "mm":
         cmd = [DREAMINA, "multimodal2video"]
         for img in seg["images"]:
             cmd += ["--image", img]
@@ -99,7 +104,8 @@ def submit(seg, audio_dir, model=None, res="720p"):
             if not os.path.exists(seg["video_ref"]):
                 raise FileNotFoundError(f"{seg['seg']}: video_ref 不存在,先跑 depth_ref.py segments.json --video 原片")
             cmd += ["--video", seg["video_ref"]]
-        cmd += ["--prompt", seg["prompt"], "--duration", dur, "--ratio", "9:16",
+        # 横屏片(10-16 祛疣英文CG广告)在段上写 "ratio":"16:9";缺省仍竖屏
+        cmd += ["--prompt", seg["prompt"], "--duration", dur, "--ratio", seg.get("ratio") or "9:16",
                 "--model_version", model, "--video_resolution", res, "--poll", "0"]
     else:
         # ★i2v 的画面比例【从输入图推断】,CLI 不接受 --ratio。产品图多是方图 →
@@ -205,7 +211,9 @@ def _salvage(seg, clips_dir, jm_model):
     print(f"[打捞] {seg['seg']} 账本里第{a['n']}次提交({a['backend']} {a['task']})没下到,先补抓", flush=True)
     try:
         if a["backend"] == "jimeng":
-            res = wait_download(a["task"], dst, tries=10, gap=15, model=a.get("model") or jm_model)
+            # ★打捞用正常轮询预算(10-16 实撞:原 tries=10 只等150秒,任务还在 Generating 就判失败
+            #   重提,S2/S3 各白扣70积分;即梦现已可多路并发,打捞撞上在跑的任务是常态)
+            res = wait_download(a["task"], dst, model=a.get("model") or jm_model)
         else:
             res = _load_backend(a["backend"]).wait_download(a["task"], dst, tries=30, gap=10)
             res = res[0] if isinstance(res, tuple) else res
@@ -234,6 +242,8 @@ def _load_backend(name):
         import rh_gen as m; return m          # RunningHub海螺h3(渠道价¥0.48/秒,已被 mmh3 取代)
     if name == "mmh3":
         import mmh3_gen as m; return m        # MiniMax H3 官方规范(秘塔渠道 768P¥0.09/秒,base_url可换)
+    if name in ("libtv", "libtv25"):
+        import libtv_gen as m; return m.Leg(name)   # LibTV 画布(Seedance 2.0 / 2.5,积分计费)
     return None
 
 
@@ -241,7 +251,9 @@ def _load_backend(name):
 # 多提一条就 ret=1310 ExceedConcurrencyLimit(换 --session 也没用,08-09 穷举过);
 # RH 海螺 h3 实测 3 段同时提交全接受、完成间隔仅17-23秒=真并行。
 # ark/xyq 未测并发,保守按 1 处理,验过再加进来。
-CONCURRENT_BACKENDS = {"rh", "mmh3"}   # mmh3 并发未实测,首次批量前先探(失败不计费)
+CONCURRENT_BACKENDS = {"rh", "mmh3", "libtv", "libtv25"}   # mmh3 并发未实测,首次批量前先探(失败不计费);libtv 11-05 run8 五路并发实跑过
+ALT_VIDEO_REF = ("mmh3", "libtv", "libtv25")   # 能带参考视频的替代腿
+ALT_MULTI_IMAGE = ("mmh3", "rh", "libtv", "libtv25")   # i2v 段能吃多张图的替代腿
 
 
 def _vref(seg, use_name):
@@ -249,7 +261,7 @@ def _vref(seg, use_name):
     ★H3 读得懂深度图但只按"有哪些动作"重演,节奏/景别不跟(10-09 戊组)—— 要逐帧跟走即梦。"""
     if not seg.get("video_ref"):
         return {}
-    if use_name == "mmh3":
+    if use_name in ALT_VIDEO_REF:
         return {"videos": [seg["video_ref"]]}
     raise ValueError(f"{seg['seg']}: 挂了深度动作参考,但 {use_name} 腿不支持视频参考 —— 改走即梦或 mmh3")
 
@@ -257,7 +269,7 @@ def _vref(seg, use_name):
 def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
     """替代后端的单段生成(提交→轮询→下载)。线程安全,供并发池调用。"""
     name = seg["seg"]; dst = os.path.join(clips_dir, f"{name}.mp4")
-    tag = {"mm": "口播", "i2v": "image2video"}[seg["type"]]
+    tag = {"mm": "口播", "i2v": "image2video", "t2v": "text2video"}[seg["type"]]
     print(f"[{name}] {tag} {seg['duration']}s [{use_name}] 提交中", flush=True)
     try:
         if seg.get("talking"):
@@ -278,8 +290,10 @@ def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
             #   (08-20 榴莲千层:S3 是"有人出镜但没人该开口"→走了 i2v,人设图挂上了却没被送,
             #    成片里那段换了个完全不同的人)。h3 规范本来就吃多图;
             #   即梦那条腿只吃一张,所以按后端能力分流。
-            _imgs = seg.get("images") or [seg["anchor"]]
-            if use_name in ("mmh3", "rh") and len(_imgs) > 1:
+            _imgs = seg.get("images") or ([seg["anchor"]] if seg.get("anchor") else [])
+            if seg["type"] == "t2v" and hasattr(use, "submit_t2v"):
+                tid = use.submit_t2v(seg["prompt"], duration=seg["duration"], resolution=res, ratio="9:16")
+            elif use_name in ALT_MULTI_IMAGE and len(_imgs) > 1:
                 tid = use.submit_mm(_imgs, None, seg["prompt"],
                                     duration=seg["duration"], resolution=res, ratio="9:16")
             else:
@@ -305,15 +319,20 @@ def _gen_alt(seg, use, use_name, clips_dir, audio_dir, res="720p"):
 
 # ★leg → (后端, 即梦档位) 的派发表。plan_segments --by-leg 会给每段打 leg 标记。
 LEG_DISPATCH = {"mmh3": ("mmh3", None), "rh": ("rh", None),
+                "libtv": ("libtv", None), "libtv25": ("libtv25", None),
                 "jimeng": (None, "seedance2.0_vip"), "jimeng25": (None, "seedance2.5")}
 
 
 def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_backend="jimeng",
-        jimeng_model=None, jimeng_res="720p", concurrency=1, alt_res="720p", auto_leg=False):
+        jimeng_model=None, jimeng_res="720p", concurrency=1, alt_res="720p", auto_leg=False,
+        jimeng_via="jimeng"):
     segs = json.load(open(plan_path))
     os.makedirs(clips_dir, exist_ok=True)
     if only:
         segs = [s for s in segs if s["seg"] in only]
+    if jimeng_via == "libtv":
+        # ★即梦 CLI 不可用时整体改道:同是 Seedance,段里的 jimeng/jimeng25 标记不用动
+        LEG_DISPATCH.update({"jimeng": ("libtv", None), "jimeng25": ("libtv25", None)})
     alt = _load_backend(i2v_backend)
     mm_alt = _load_backend(mm_backend)
     _tk = [s["seg"] for s in segs if s.get("talking")]
@@ -397,7 +416,7 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
     total_credit = 0
     for seg in todo:
         name = seg["seg"]; dst = os.path.join(clips_dir, f"{name}.mp4")
-        tag = {"mm": "口播", "i2v": "image2video"}[seg["type"]]
+        tag = {"mm": "口播", "i2v": "image2video", "t2v": "text2video"}[seg["type"]]
         # ★替代后端: i2v 段可走 Ark/小云雀/RH; mm 口播段目前只有即梦和 RH 海螺能对口型
         # ★串行路也要过 _backend_of(Kimi 线 08-23 实撞):--auto-leg 之前只对并发池生效,
         #   concurrency=1 时全落即梦,派发表白打。
@@ -417,6 +436,12 @@ def run(plan_path, clips_dir, audio_dir, only, dry, i2v_backend="jimeng", mm_bac
                     wav = os.path.join(audio_dir, f"{name}.wav") if audio_dir else None
                     wav = wav if (wav and os.path.exists(wav)) else None
                     tid = use.submit_mm(seg["images"], wav, seg["prompt"], **_vref(seg, use_name),
+                                        duration=seg["duration"], resolution="720p", ratio="9:16")
+                elif seg["type"] == "t2v" and hasattr(use, "submit_t2v"):
+                    tid = use.submit_t2v(seg["prompt"], duration=seg["duration"], resolution="720p", ratio="9:16")
+                elif use_name in ALT_MULTI_IMAGE and len(seg.get("images") or []) > 1:
+                    # ★串行路也要送全部参考图(并发路 08-20 修过,这里漏了)
+                    tid = use.submit_mm(seg["images"], None, seg["prompt"],
                                         duration=seg["duration"], resolution="720p", ratio="9:16")
                 else:
                     tid = use.submit_i2v(_i2v_anchor(seg), seg["prompt"],
@@ -476,10 +501,10 @@ if __name__ == "__main__":
     ap.add_argument("--clips", default="./clips")
     ap.add_argument("--audio-dir", default=None)
     ap.add_argument("--only", default=None, help="逗号分隔段名,如 S1,S3")
-    ap.add_argument("--i2v-backend", choices=["jimeng", "ark", "xyq", "rh", "mmh3"], default="jimeng",
+    ap.add_argument("--i2v-backend", choices=["jimeng", "ark", "xyq", "rh", "mmh3", "libtv", "libtv25"], default="jimeng",
                     help="image2video段后端: jimeng(积分池) / ark(火山按token) / xyq(小云雀) / "
                          "mmh3(★MiniMax H3官方规范,秘塔渠道768P¥0.09/秒) / rh(同模型但渠道价¥0.48/秒,已被mmh3取代)")
-    ap.add_argument("--mm-backend", choices=["jimeng", "rh", "mmh3"], default="jimeng",
+    ap.add_argument("--mm-backend", choices=["jimeng", "rh", "mmh3", "libtv", "libtv25"], default="jimeng",
                     help="口播段后端: jimeng(积分池,产品形体锚定最准) / mmh3(★H3最便宜,平面印刷图案强) / rh(同模型贵5倍)")
     ap.add_argument("--jimeng-model", default=None,
                     help=f"即梦档位,默认 {JIMENG_MODEL}(14积分/秒)。"
@@ -492,6 +517,8 @@ if __name__ == "__main__":
                          "即梦 CLI 通道账号级限流=1,多提必 ret=1310,换 session 也没用")
     ap.add_argument("--alt-res", default="720p",
                     help="替代后端的分辨率(rh: 720p→768P ¥0.48/秒 / 2k ¥0.77/秒)")
+    ap.add_argument("--jimeng-via", choices=["jimeng", "libtv"], default="jimeng",
+                    help="配合 --auto-leg:把 jimeng/jimeng25 段改走 LibTV(Seedance 2.0/2.5,积分计费)")
     ap.add_argument("--auto-leg", action="store_true",
                     help="★按每段的 leg 字段自动派发后端(需 plan_segments --by-leg 先打标)。"
                          "package_text→mmh3 / hero_real→即梦2.0vip / 人审标 jimeng25→2.5")
@@ -500,4 +527,4 @@ if __name__ == "__main__":
     __import__("config").guard_args(a, "gen_segments")   # 输出不许落进 skill 目录(project.py init 建项目文件夹)
     only = set(a.only.split(",")) if a.only else None
     run(a.plan, a.clips, a.audio_dir, only, a.dry_run, a.i2v_backend, a.mm_backend,
-        a.jimeng_model, a.jimeng_res, a.concurrency, a.alt_res, a.auto_leg)
+        a.jimeng_model, a.jimeng_res, a.concurrency, a.alt_res, a.auto_leg, a.jimeng_via)

@@ -18,7 +18,7 @@ import os
 # 视觉描述字段:进提示词与剥词正则的那些,全角标点 → 半角
 VISUAL_KEYS = ("action", "subject", "scene", "camera", "shot_size", "product_in_frame",
                "person", "camera_evidence", "mood", "lighting", "outfit", "props",
-               "transition", "visual_note")
+               "transition", "visual_note", "posture", "micro_expression", "background_motion")
 _PUNCT = str.maketrans({"，": ",", "；": ";", "（": "(", "）": ")", "：": ":",
                         "　": " "})
 

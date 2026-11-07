@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
-rhdh_gen.py — RunningHub「YZ金鱼-商业数字人v3」数字人腿(第五条生成腿 / 第一视角口播直通)
+rhdh_gen.py — RunningHub「YZ金鱼-超自然商业数字人v4」数字人腿(第五条生成腿 / 第一视角口播直通)
+
+★10-19 换 v4(webapp 2110976097943904257,作者更新、效果更好;v3 备份 experiments/rhdh_gen_v3_bak_1019.py)。
+  v4 基于 MiniMax H3 优化:1~6 张参考图 + 锁定上传音频,提示词可自然语言或 H3 六段式("图片1中的人物...")。
+  参数全变了:没有 720P/900P 档位和 DLSS 了,改成
+    * megapixels:人脸占比大用 1.2(快),人脸小用 1.5/2.0(慢);对照表见应用简介(1.5@16:9=1664x928)
+    * aspect:"9:16 (Portrait Widescreen)" 等 8 种
+    * 总步数/一采步数(二采=总-一采):动态小 10/6,动态大 12/6,更高 16/8(时间换质量)
+    * scheduler:默认 simple,可试 beta(暗画面可能出问题)
+  ★时长=音频时长,作者建议单段 ≤30 秒 → 分段默认 20 秒(上限 1.5 倍=30 秒),v3 的 1 分钟段不再适用。
+  以下 v3 实证里的计费/撤单/下载血泪闸仍然有效;画质/显存那几条是 v3 的,v4 需重测。
 
 和其它四条腿不同:这不是逐段生成器,而是【整条口播片直通】后端 ——
 一张主播参考图 + 整条音频,靠应用的 AudioCrop start/end 参数切分,1 分钟一段全并行,
@@ -30,24 +40,58 @@ import requests
 from config import rh_key
 
 BASE = "https://www.runninghub.cn"
-WEBAPP = "2075652796388560898"   # YZ金鱼-商业数字人v3
+WEBAPP = "2110976097943904257"   # YZ金鱼-超自然商业数字人v4(10-19;v3 = 2075652796388560898)
 EP_RUN = f"{BASE}/openapi/v2/run/ai-app/{WEBAPP}"
 EP_QUERY = f"{BASE}/openapi/v2/query"
 EP_UPLOAD = f"{BASE}/openapi/v2/media/upload/binary"
 EP_CANCEL = f"{BASE}/task/openapi/cancel"
 NO_PROXY = {"http": None, "https": None}
 
-# 分辨率 select 映射:1=720P 2=900P 3=1080P(实证:900P+DLSS5 是清晰度底线)
-RES_MAP = {"720p": "1", "900p": "2", "1080p": "3", "1": "1", "2": "2", "3": "3"}
+# v4 节点(10-19 apiCallDemo 实取)
+IMG_NODES = ["51", "49", "50", "43", "19", "23"]   # image1..image6,没用到的不传(应用默认 None)
+ASPECTS = {"9:16": "9:16 (Portrait Widescreen)", "16:9": "16:9 (Widescreen)", "1:1": "1:1 (Square)",
+           "3:4": "3:4 (Portrait Standard)", "4:3": "4:3 (Standard)", "2:3": "2:3 (Portrait Photo)",
+           "3:2": "3:2 (Photo)", "21:9": "21:9 (Ultrawide)"}
 
-# 提示词五要素:场景/环境/人物/动作情绪/景别运镜。实证可用样例(边走路边说话+跟镜):
-DEFAULT_PROMPT = (
-    "抖音短视频口播,白天的居民区户外绿化步道旁,背景有树木和远处的高楼。"
-    "一位中年男性,穿着白色无袖针织背心,胸前别着小麦克风。"
-    "他一边沿着步道自然地走路一边对着镜头说话,神情真诚自然,语速平稳,"
-    "偶尔用手部动作强调说话,微风吹动树叶。"
-    "镜头平稳地跟随他移动,保持人物在画面中央,中近景。"
-)
+# v4 是 H3 内核 + 参考图 + 锁定音频 = H3「全参考模式」(Ref2VA),提示词按 references/h3/ref-en.txt 的六段式写:
+#   subject_definitions / summary / retention_analysis / detailed_description / overall_soundscape / non_diegetic_music
+#   英文写,标签全程一致;音频是 fully_copy(原样当成片音轨),人物按它对口型。
+# ★台词不进 prompt:H3 官方通道的审查只审 prompt 文本、台词/价格词会被拒(见 mmh3_gen 头注),RH 上同理先防着;
+#   口型靠 <Audio 1> 驱动,prompt 里只说"按 <Audio 1> 说话"。
+def h3_prompt(person="the person", scene="the same setting as in <Picture 1>",
+              action="speaks naturally and sincerely to the camera at a steady pace, occasionally using small hand "
+                     "gestures for emphasis, with natural blinking and subtle head movement",
+              camera="A static medium close-up keeps the speaker centered in the frame.",
+              n_images=1, style="A realistic Douyin vertical talking-head video with natural lighting and sharp, clear detail."):
+    """组装六段式 Ref2VA 提示词。person/scene 用英文短语描述(外貌/服饰/环境),不写台词。
+    n_images>1 时声明多张图是同一人物的不同角度。"""
+    pics = ", ".join(f"<Picture {i}>" for i in range(1, n_images + 1))
+    src = f"in {pics}" if n_images == 1 else f", shown from different angles in {pics}"
+    return f"""subject_definitions:
+<Subject 1> is {person} {src}; identity, face, hairstyle, clothing and accessories follow the reference exactly.
+<Subject 2> is the environment from <Picture 1>: {scene}.
+<Audio 1> is the complete speech track spoken by <Subject 1> (S1).
+
+summary:
+[reference generation + audio reuse] The target video shows <Subject 1> speaking directly to the camera in <Subject 2>, lip-synced to <Audio 1>, which is reused as the complete final audio track.
+
+retention_analysis:
+<Subject 1> (appears in [Shot 1]): fully_preserved - identity, face, hairstyle, clothing and accessories remain unchanged.
+<Subject 2> (appears in [Shot 1]): fully_preserved - the setting, props and lighting remain unchanged.
+<Audio 1>: fully_copy - <Audio 1> is reused 1:1 as the complete final audio track.
+
+detailed_description:
+{style}
+[Shot 1] {camera} <Subject 1> (S1) stands or sits in <Subject 2> facing the camera and {action}. Throughout the shot <Subject 1> (S1) speaks the lines of <Audio 1>, with mouth shapes, jaw movement and facial expression precisely synchronized to the speech rhythm; the mouth closes naturally during pauses. Appearance, clothing and the background stay consistent from the first frame to the last.
+
+overall_soundscape:
+Only the speech from <Audio 1>; no added ambience.
+
+non_diegetic_music:
+N/A"""
+
+
+DEFAULT_PROMPT = h3_prompt()
 
 
 def _headers(json_ct=True):
@@ -77,20 +121,26 @@ def upload(path):
     return fn
 
 
-def submit_seg(image_fn, audio_fn, start, end, resolution="2", prompt=DEFAULT_PROMPT,
-               lock_cam=False, dlss=True, instance="plus"):
-    """提交一段。start/end 格式 m:ss(半角冒号!)。返回 taskId。"""
+def submit_seg(images, audio_fn, start, end, megapixels=1.5, prompt=DEFAULT_PROMPT, aspect="9:16",
+               steps=10, first_steps=6, scheduler="simple", instance="plus"):
+    """提交一段。images = fileName 或 1~6 个 fileName 的列表;start/end 格式 m:ss(半角冒号!),
+    单段建议 ≤30 秒。返回 taskId。"""
+    if isinstance(images, str):
+        images = [images]
+    if not 1 <= len(images) <= len(IMG_NODES):
+        raise ValueError(f"参考图要 1~{len(IMG_NODES)} 张,给了 {len(images)}")
     body = {
         "nodeInfoList": [
-            {"nodeId": "379", "fieldName": "select", "fieldValue": RES_MAP[str(resolution).lower()]},
-            {"nodeId": "343", "fieldName": "value", "fieldValue": str(lock_cam).lower()},
-            {"nodeId": "359", "fieldName": "value", "fieldValue": str(dlss).lower()},
-            {"nodeId": "366", "fieldName": "image", "fieldValue": image_fn},
-            {"nodeId": "302", "fieldName": "audio", "fieldValue": audio_fn},
-            {"nodeId": "303", "fieldName": "start_time", "fieldValue": start},
-            {"nodeId": "303", "fieldName": "end_time", "fieldValue": end},
-            {"nodeId": "362", "fieldName": "text", "fieldValue": prompt},
-        ],
+            {"nodeId": "252", "fieldName": "aspect_ratio", "fieldValue": ASPECTS.get(aspect, aspect)},
+            {"nodeId": "252", "fieldName": "megapixels", "fieldValue": str(megapixels)},
+            {"nodeId": "261", "fieldName": "scheduler", "fieldValue": scheduler},
+            {"nodeId": "448", "fieldName": "value", "fieldValue": str(steps)},
+            {"nodeId": "449", "fieldName": "value", "fieldValue": str(first_steps)},
+            {"nodeId": "402", "fieldName": "audio", "fieldValue": audio_fn},
+            {"nodeId": "403", "fieldName": "start_time", "fieldValue": start},
+            {"nodeId": "403", "fieldName": "end_time", "fieldValue": end},
+            {"nodeId": "263", "fieldName": "text", "fieldValue": prompt},
+        ] + [{"nodeId": n, "fieldName": "image", "fieldValue": f} for n, f in zip(IMG_NODES, images)],
         "instanceType": instance,
         "usePersonalQueue": "false",
     }
@@ -129,7 +179,8 @@ def result_url(R):
 def download(url, dst):
     """稳健下载:URL 含中文先 quote path;先下 .part 再改名(半截文件绝不覆盖好文件)。"""
     p = urlsplit(url)
-    url = urlunsplit((p.scheme, p.netloc, quote(p.path), p.query, p.fragment))
+    # ★10-11:RH 有时返回已百分号编码的 URL,safe 含 % 防二次编码(%E6→%25E6 导致 404)
+    url = urlunsplit((p.scheme, p.netloc, quote(p.path, safe="/%"), p.query, p.fragment))
     op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     urllib.request.install_opener(op)
     tmp = dst + ".part"
@@ -138,7 +189,8 @@ def download(url, dst):
     return os.path.getsize(dst)
 
 
-def good_mp4(path, min_mb=20):
+def good_mp4(path, min_mb=2):
+    # ★10-11:原阈值 20MB 是按 1 分钟段定的,40 秒段(15MB)会被误判损坏;真正的判据是能读出时长
     if not os.path.exists(path) or os.path.getsize(path) < min_mb * 1e6:
         return False
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -183,7 +235,7 @@ def fmt_t(s):
     return f"{s//60}:{s%60:02d}"
 
 
-def plan_segments(total, seg=60.0, silences_file=None):
+def plan_segments(total, seg=20.0, silences_file=None):
     """分段表。silences_file 来自:
     ffmpeg -i 音频 -af silencedetect=noise=-35dB:d=0.3 -f null - 2>&1 | grep -oE 'silence_(start|end): [0-9.]+'
     有静音点贴静音点,没有(连续讲话)按整分钟硬切。"""
@@ -205,8 +257,8 @@ def plan_segments(total, seg=60.0, silences_file=None):
     return [[fmt_t(bounds[i]), fmt_t(bounds[i + 1])] for i in range(len(bounds) - 1)]
 
 
-def batch(workdir, resolution="2", dlss=True, instance="plus", concurrency=30,
-          prompt=DEFAULT_PROMPT):
+def batch(workdir, megapixels=1.5, aspect="9:16", steps=10, first_steps=6, scheduler="simple",
+          instance="plus", concurrency=30, prompt=DEFAULT_PROMPT):
     """全并行提交 segments.json 里的所有段,轮询下载,台账断点续跑。"""
     segs = json.load(open(os.path.join(workdir, "segments.json"), encoding="utf-8"))
     assets = json.load(open(os.path.join(workdir, "assets_rhdh.json"), encoding="utf-8"))
@@ -228,16 +280,18 @@ def batch(workdir, resolution="2", dlss=True, instance="plus", concurrency=30,
             if len(active) >= concurrency:
                 break
             rec = led.get(str(i), {})
-            if rec.get("status") == "FAILED_FINAL":
+            # ★10-11 血案:pending 是开跑时的快照,循环每轮都会重扫;已 DONE / 待重下 / 已在跑的段
+            #   必须跳过,否则"完成一段就重提一段"(紫苏油粤语 7 段里 5 段被重复提交,手动撤单才止损)
+            if i in active or rec.get("status") in ("FAILED_FINAL", "DONE", "SUCCESS_UNDOWNLOADED"):
                 continue
             if rec.get("status") == "SUBMITTED" and rec.get("taskId"):
                 active[i] = rec["taskId"]
                 continue
             s, e = segs[i]
             try:
-                tid = submit_seg(assets["image"], assets["audio"], s, e,
-                                 resolution=resolution, prompt=prompt,
-                                 dlss=dlss, instance=instance)
+                tid = submit_seg(assets.get("images") or [assets["image"]], assets["audio"], s, e,
+                                 megapixels=megapixels, prompt=prompt, aspect=aspect, steps=steps,
+                                 first_steps=first_steps, scheduler=scheduler, instance=instance)
             except Exception as ex:
                 print(f"seg{i:02d} 提交失败: {ex}", flush=True)
                 if "812" in str(ex):
@@ -325,35 +379,50 @@ if __name__ == "__main__":
     ap.add_argument("--workdir", default=".", help="资产/台账/产物目录")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("upload", help="上传主播参考图+整条音频,写 assets_rhdh.json")
-    p.add_argument("--image", required=True); p.add_argument("--audio", required=True)
-    p = sub.add_parser("submit", help="提交单段")
+    def gen_args(p):
+        p.add_argument("--megapixels", type=float, default=1.5, help="人脸大 1.2 / 人脸小 1.5~2.0")
+        p.add_argument("--aspect", default="9:16", choices=list(ASPECTS))
+        p.add_argument("--steps", type=int, default=10, help="总步数:动态小 10,动态大 12,更高 16")
+        p.add_argument("--first-steps", type=int, default=6, help="一采步数(二采=总-一采)")
+        p.add_argument("--scheduler", default="simple", help="simple(默认) / beta")
+        p.add_argument("--instance", default="plus")
+        p.add_argument("--prompt", default=None, help="整段自写提示词;不给就用下面几项按 H3 六段式自动组装")
+        p.add_argument("--person", default="the person", help="英文:人物外貌/服饰")
+        p.add_argument("--scene", default="the same setting as in <Picture 1>", help="英文:环境")
+        p.add_argument("--action", default=None, help="英文:动作情绪(默认对镜自然口播)")
+        p.add_argument("--camera", default=None, help="英文:景别运镜(默认固定中近景)")
+
+    p = sub.add_parser("upload", help="上传主播参考图(1~6 张)+整条音频,写 assets_rhdh.json")
+    p.add_argument("--image", required=True, nargs="+"); p.add_argument("--audio", required=True)
+    p = sub.add_parser("submit", help="提交单段(≤30 秒)")
     p.add_argument("--start", required=True); p.add_argument("--end", required=True)
-    p.add_argument("--resolution", default="2"); p.add_argument("--instance", default="plus")
-    p.add_argument("--no-dlss", action="store_true"); p.add_argument("--prompt", default=DEFAULT_PROMPT)
+    gen_args(p)
     p = sub.add_parser("wait", help="轮询并下载(也可用于 24h 内补抓)")
     p.add_argument("taskId"); p.add_argument("out")
     p = sub.add_parser("cancel", help="撤单"); p.add_argument("taskId")
     p = sub.add_parser("plan", help="生成分段表 segments.json")
     p.add_argument("--duration", type=float, required=True)
-    p.add_argument("--seg", type=float, default=60); p.add_argument("--silences", default=None)
+    p.add_argument("--seg", type=float, default=20, help="目标段长秒(上限 1.5 倍;v4 建议单段 ≤30 秒)")
+    p.add_argument("--silences", default=None)
     p = sub.add_parser("batch", help="全并行批量(断点续跑)")
-    p.add_argument("--resolution", default="2"); p.add_argument("--instance", default="plus")
-    p.add_argument("--no-dlss", action="store_true"); p.add_argument("--concurrency", type=int, default=30)
-    p.add_argument("--prompt", default=DEFAULT_PROMPT)
+    gen_args(p); p.add_argument("--concurrency", type=int, default=30)
     p = sub.add_parser("concat", help="按序拼接+重编码")
     p.add_argument("--out", default="output.mp4"); p.add_argument("--crf", type=int, default=20)
     a = ap.parse_args()
 
     os.makedirs(a.workdir, exist_ok=True)
+    if a.cmd in ("submit", "batch") and not a.prompt:
+        ap_ = json.load(open(os.path.join(a.workdir, "assets_rhdh.json"), encoding="utf-8"))
+        kw = {k: v for k, v in dict(action=a.action, camera=a.camera).items() if v}
+        a.prompt = h3_prompt(a.person, a.scene, n_images=len(ap_.get("images") or [1]), **kw)
     if a.cmd == "upload":
-        d = {"image": upload(a.image), "audio": upload(a.audio)}
+        d = {"images": [upload(f) for f in a.image], "audio": upload(a.audio)}
         _atomic_dump(d, os.path.join(a.workdir, "assets_rhdh.json"))
         print(d)
     elif a.cmd == "submit":
         d = json.load(open(os.path.join(a.workdir, "assets_rhdh.json"), encoding="utf-8"))
-        print(submit_seg(d["image"], d["audio"], a.start, a.end, a.resolution,
-                         a.prompt, dlss=not a.no_dlss, instance=a.instance))
+        print(submit_seg(d.get("images") or [d["image"]], d["audio"], a.start, a.end, a.megapixels, a.prompt,
+                         a.aspect, a.steps, a.first_steps, a.scheduler, a.instance))
     elif a.cmd == "wait":
         print(wait_download(a.taskId, a.out))
     elif a.cmd == "cancel":
@@ -363,6 +432,7 @@ if __name__ == "__main__":
         _atomic_dump(segs, os.path.join(a.workdir, "segments.json"))
         print(f"{len(segs)} 段 -> segments.json")
     elif a.cmd == "batch":
-        batch(a.workdir, a.resolution, not a.no_dlss, a.instance, a.concurrency, a.prompt)
+        batch(a.workdir, a.megapixels, a.aspect, a.steps, a.first_steps, a.scheduler,
+              a.instance, a.concurrency, a.prompt)
     elif a.cmd == "concat":
         concat(a.workdir, a.out, a.crf)

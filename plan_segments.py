@@ -74,6 +74,33 @@ def _split_action(action, n):
     return groups, True
 
 
+def _stage_bounds(s, n, max_dur):
+    """子段分界贴到最近的动作阶段边界(±1/4 段长内),别把一个递接/擦拭动作切成两半。
+    贴完有子段超长就退回等分。"""
+    dur = s["end"] - s["start"]
+    seglen = dur / n
+    even = [s["start"] + i * seglen for i in range(n + 1)]
+    marks = sorted(float(x["start"]) for x in (s.get("action_stages") or [])
+                   if isinstance(x, dict) and isinstance(x.get("start"), (int, float)))
+    out = list(even)
+    for i in range(1, n):
+        near = [m for m in marks if abs(m - even[i]) <= seglen / 4]
+        if near:
+            out[i] = min(near, key=lambda m: abs(m - even[i]))
+    if any(b - a > max_dur or b - a <= 0 for a, b in zip(out, out[1:])):
+        return even
+    return out
+
+
+def _stages_text(stages, a, b):
+    """取落在 [a,b) 时间窗内的动作阶段拼成该子段动作,结尾带终态,给模型一个收住的点。"""
+    hit = [x for x in stages if isinstance(x, dict) and float(x.get("start", 0)) < b and float(x.get("end", 0)) > a]
+    if not hit:
+        return "", []
+    t = ";".join(x.get("do", "") for x in hit if x.get("do"))
+    return (t + (f",最终{hit[-1]['to']}" if hit[-1].get("to") else "")), hit
+
+
 def split_long_shots(shots, max_dur=15):
     """超过 max_dur 的单个长镜 → 按句子边界拆成多个子段(1a/1b…),台词按字数分配,
     动作按段内时间窗裁剪(见 _split_action)。"""
@@ -91,13 +118,17 @@ def split_long_shots(shots, max_dur=15):
             print(f"[plan][⚠] #{s['shot_id']} 是 {dur:.1f}s 长镜,action 带多段式连接词却切不出 "
                   f"{n} 个分句,{n} 个子段会各挂一份整段动作(模型把长动作压进短段)。"
                   f"→ 回 shotlist 把这镜 action 按时间顺序断成 ≥{n} 个分句", file=sys.stderr)
-        seglen = dur / n
+        bounds = _stage_bounds(s, n, max_dur)
         for i in range(n):
             ns = dict(s)
-            ns["start"] = round(s["start"] + i * seglen, 2)
-            ns["end"] = round(s["start"] + (i + 1) * seglen, 2)
+            ns["start"] = round(bounds[i], 2)
+            ns["end"] = round(bounds[i + 1], 2)
             ns["dialogue"] = chunks[i]
             ns["action"] = acts[i]
+            # ★有 action_stages 就按真实时间裁,比按分句数平均分准
+            st_txt, st_hit = _stages_text(s.get("action_stages") or [], ns["start"], ns["end"])
+            if st_txt:
+                ns["action"], ns["action_stages"], cropped = st_txt, st_hit, True
             ns["shot_id"] = f"{s['shot_id']}{chr(97 + i)}"
             ns["_split"] = True
             ns["_action_cropped"] = cropped
@@ -131,6 +162,7 @@ def load_shotlist(shotlist_path, plan_path=None):
 LEG_BY_ROLE = {"package_text": "mmh3", "hero_real": "jimeng", "dynamic": "mmh3", "none": "mmh3"}
 LEG_DEFAULT = "mmh3"
 LEG_RATE = {"mmh3": 0.11, "jimeng": 0.742, "jimeng25": 1.378}   # ¥/秒,08-10 实测口径
+# LibTV 腿不在这张表:它和即梦是同模型,由 gen_segments --jimeng-via libtv 在派发时替换,规划阶段不用分
 
 
 # ★hero_real 的"真伪"门槛(08-11 定):product_role 是镜级粗标签,很多"手持产品的人物戏"
@@ -527,6 +559,12 @@ def plan(shotlist_path, assets_path, out_path, max_cuts=MAX_CUTS, min_dur=0,
         w = ("  ⚠️ " + "; ".join(warns)) if warns else ""
         md.append(f"\n## {sid} [{start}-{end}] {dur}s  {role} · 腿={seg['leg']}{flag}{w}\n"
                   f"```\n{seg['prompt']}\n```")
+        # 反推的表演细节还没进生成模板(动模板要先单段 A/B),先摆给人审,手改提示词时照抄
+        for _s in shots:
+            _n = [f"{k}:{_s[f]}" for k, f in (("姿态", "posture"), ("微表情", "micro_expression"),
+                                              ("说话方式", "delivery"), ("背景动态", "background_motion")) if _s.get(f)]
+            if _n:
+                md.append(f"- #{_s.get('shot_id')} " + " | ".join(_n))
 
     json.dump(segments, open(out_path, "w"), ensure_ascii=False, indent=2)
     mdp = out_path.replace(".json", ".md")

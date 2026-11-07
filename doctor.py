@@ -103,6 +103,22 @@ def check_kimi():
     return OK, f"key {msg},认证探针通过"
 
 
+def check_libtv():
+    # LibTV:Seedance 2.0/2.5 的备选腿,即梦不可用时 --jimeng-via libtv 改道,可选 → 缺失只 WARN
+    cli = os.path.expanduser("~/.libtv/libtv")
+    if not os.path.exists(cli):
+        return WARN, "CLI 不在 ~/.libtv/libtv(见 libtv-cli skill 的安装说明)"
+    env = dict(os.environ)
+    env["NO_PROXY"] = env["no_proxy"] = "liblib.art,liblib.tv,liblib.cloud," + env.get("NO_PROXY", "")
+    try:
+        r = subprocess.run([cli, "account", "list"], capture_output=True, text=True, env=env, timeout=30)
+        a = next(x for x in json.loads(r.stdout.strip().splitlines()[-1])["accounts"] if x.get("isActive"))
+    except Exception as e:
+        return WARN, f"登录态查不到({type(e).__name__}) → libtv login web"
+    m = a.get("memberAccount") or {}
+    return OK, f"{a.get('accountName')} · {m.get('memberName', '非会员')} ⚠积分计费,跑前先报总价"
+
+
 def check_xyq():
     # 小云雀(pippit-tool-cli):即梦之外的备选生成腿,可选 → 缺失只 WARN 不挡开工
     import config
@@ -252,6 +268,7 @@ def main():
               ("反推模型/计费口子", check_ark),
               ("Kimi K3(双反推腿,可选)", check_kimi),
               ("小云雀(生成备腿,可选)", check_xyq),
+              ("LibTV(生成备腿,可选)", check_libtv),
               ("MiniMax H3规范(付费腿,可选)", check_mmh3),
               ("RunningHub海螺(付费腿,可选)", check_rh),
               ("CosyVoice(配音)", check_cosyvoice),

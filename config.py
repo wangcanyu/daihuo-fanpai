@@ -14,10 +14,15 @@ import os, re
 # ★火山有两条计费口子,端点【不同】,key 也【不通用】(08-22 实测 401):
 #   - 控制台按量  base = .../api/v3        key = ARK_API_KEY(ark-xxx)
 #   - Agent Plan  base = .../api/plan/v3   key = 该套餐专属 key(ARK_PLAN_KEY)
-#   套餐里【没有 seed-2-1-pro,只有 turbo】—— 切过去是 Pro→turbo 的模型降级,
-#   不只是换个计费口子。切之前先跑质量对照(见 HANDOFF「反推的钱与端点」)。
+#   (旧:套餐里没有 seed-2-1-pro,只有 turbo。10-18 实测套餐已能调 pro,turbo 即将下线,套餐默认改 pro。)
 ARK_PLAN_BASE = os.environ.get("ARK_PLAN_BASE",
                                "https://ark.cn-beijing.volces.com/api/plan/v3")
+# ★10-20:同账户另开了 Coding Plan,作 Agent Plan 周限额用完后的备用口子(实测能调 pro + 视频反推)。
+#   key 在 ~/.config/daihuo-fanpai/ark_coding_key;切换开关 = 同目录 ark_use_coding 文件(存在即走 coding)。
+#   seed_reverse 遇持续 429 会自动 ark_failover() 建开关;要切回 Agent Plan 删掉开关文件即可。
+ARK_CODING_BASE = os.environ.get("ARK_CODING_BASE",
+                                 "https://ark.cn-beijing.volces.com/api/coding/v3")
+_CFG_DIR = os.path.expanduser("~/.config/daihuo-fanpai")
 ARK_PLATFORM_BASE = os.environ.get("ARK_BASE_URL",
                                    "https://ark.cn-beijing.volces.com/api/v3")
 
@@ -55,20 +60,46 @@ def plan_key(soft=False):
 _ROUTE_SAID = False
 
 
+def coding_key():
+    p = os.path.join(_CFG_DIR, "ark_coding_key")
+    return open(p).read().strip() if os.path.exists(p) else None
+
+
+def on_coding():
+    return os.path.exists(os.path.join(_CFG_DIR, "ark_use_coding")) and bool(coding_key())
+
+
+def ark_failover():
+    """Agent Plan 持续 429 时调用:有 Coding Plan key 且还没切过 → 建开关、返回 True(调用方立即重试)。"""
+    if os.environ.get("ARK_LANE_KEY") or on_coding() or not coding_key() or not ark_use_plan():
+        return False
+    import sys, time
+    open(os.path.join(_CFG_DIR, "ark_use_coding"), "w").write(time.strftime("%m-%d %H:%M") + "\n")
+    print("[ark] Agent Plan 持续 429 → 自动切到 Coding Plan", file=sys.stderr, flush=True)
+    return True
+
+
 def ark_endpoint():
     """返回 (base_url, key, 走的是哪条口子) —— 反推/评委/C模式统一从这里取,别再各自硬编码。
     ★全 skill 只有这一个大模型出口(10-09 定):Kimi 线曾另开一条 plan/v1 chat 通道,
       两套用不同的环境变量名,结果"提示说在花钱、实际走套餐"这类口径打架。
     ★每个进程第一次取口子时打印实际走的通道和模型 —— 走哪条要看得见,不靠猜。"""
     global _ROUTE_SAID
-    if ark_use_plan():
+    # ★10-30:多车道锁通道(ins 1711 条三路并行:agent-plan / coding-A / 另一账号 coding-B)。
+    #   设了 ARK_LANE_BASE+ARK_LANE_KEY 就只走这条,不看开关文件、也不 failover。
+    if os.environ.get("ARK_LANE_KEY"):
+        ep = (os.environ.get("ARK_LANE_BASE", ARK_CODING_BASE), os.environ["ARK_LANE_KEY"].strip(),
+              os.environ.get("ARK_LANE_NAME", "lane"))
+    elif ark_use_plan() and on_coding():
+        ep = (ARK_CODING_BASE, coding_key(), "coding-plan")
+    elif ark_use_plan():
         ep = (ARK_PLAN_BASE, plan_key(), "agent-plan")
     else:
         ep = (ARK_PLATFORM_BASE, ark_key(), "platform(按量)")
     if not _ROUTE_SAID:
         import sys
         print(f"[ark] 大模型通道 = {ep[2]} · 模型 {ARK_SEED_MODEL}"
-              + ("" if ep[2] == "agent-plan" else "  ⚠按 token 计费,花的是真钱"), file=sys.stderr)
+              + ("" if ep[2] in ("agent-plan", "coding-plan") or os.environ.get("ARK_LANE_KEY") else "  ⚠按 token 计费,花的是真钱"), file=sys.stderr)
         _ROUTE_SAID = True
     return ep
 
@@ -351,7 +382,8 @@ def cjk_font():
 #   08-22 实撞:配好 plan key 后路由自动切套餐,而默认模型还是 pro,
 #   下一次反推会直接失败。显式 ARK_SEED_MODEL 永远优先。
 ARK_MODEL_PLATFORM = "doubao-seed-2-1-pro-260628"     # 按量:Pro(贵,准)
-ARK_MODEL_PLAN = "doubao-seed-2-1-turbo-260628"       # 套餐:只有 turbo
+ARK_MODEL_PLAN = "doubao-seed-2-1-pro"                # 套餐:10-18 起 pro(别名→260915)。turbo 即将下线;
+# lite 实测不适合反推:把 BGM 歌手当配音、TTS 判成真人、产品名丢失;打标签和 pro 的一致率只有 52-78%(pro↔turbo 78-95%)
 ARK_SEED_MODEL = (os.environ.get("ARK_SEED_MODEL")
                   or (ARK_MODEL_PLAN if ark_use_plan() else ARK_MODEL_PLATFORM))
 

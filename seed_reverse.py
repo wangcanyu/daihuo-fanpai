@@ -21,6 +21,11 @@ import requests
 from config import ark_endpoint as _ark_ep
 from config import ark_endpoint
 ARK_URL   = _ark_ep()[0].rstrip("/") + "/responses"
+
+
+def _ark_url():
+    # 每次现取:限额后会热切到 Coding Plan(config.ark_failover),模块级 ARK_URL 只代表启动时的口子
+    return _ark_ep()[0].rstrip("/") + "/responses"
 # ★长片反推必须显式放开输出上限:不设时套餐默认 32000,193s 直播片的逐镜 JSON 会被
 #   截断,表现为 JSONDecodeError(09-07 另一台机器批量 300 条时撞的)。
 #   截断发生在【输出侧】,和输入时长无关 —— 镜头越多越危险,不是片越长越危险。
@@ -46,6 +51,12 @@ SCHEMA = """{
    "camera": "基于上一条 camera_evidence 再定标签:固定/推/拉/摇/移/跟 + 速度",
    "subject": "主体是谁/什么 + 画面位置",
    "action": "具体动作(力学级,主体+动作都要带全,别只写结果)",
+   "action_stages": "动作阶段数组,按时间顺序。一个阶段=下一步的起始状态、动作目标、关键道具、持握/接触对象或主体组合变了才算,只是继续同一动作不算。[{\"start\":秒,\"end\":秒,\"from\":\"起始姿态/持握\",\"do\":\"动作过程\",\"to\":\"结尾状态\"}];全镜只有一个动作就给一项;时间用全片绝对秒,首尾贴齐本镜",
+   "posture": "人物姿态+支撑+接触:站/坐/蹲/跪/躺,靠着或坐在什么上,手和谁/什么接触;看不到下半身时写看得到的部分,不要猜;无人物写空",
+   "micro_expression": "1~3 项看得见的变化:眉、眼、视线方向、嘴、下巴、头部角度。不写开心紧张这类心理词;无明显变化写空",
+   "delivery": "说话方式:音量/语速/语气的可听特征和特殊嘴部动作(贴耳/遮嘴/大幅张嘴);普通说话写空",
+   "voice_type": "该镜说话者的声音类型:女|男|儿童|无法区分,无人声写空。身份不明不等于声音类型不明,看不见说话人也要从声音判",
+   "background_motion": "主体以外确实在动的东西:对象+方向+速度。要有跨帧的可见位移才算,不凭常识写飘动晃动;没有写空",
    "scene": "环境",
    "lighting": "光线方向/冷暖/明暗",
    "person": "有无真人+谁(主播/质检员等)+穿着",
@@ -58,6 +69,83 @@ SCHEMA = """{
    "key_colors": "画面关键物体颜色,尤其液体/产品颜色(这个字段帮你别漏爆点细节)"
  }]
 }"""
+
+
+# ── 研究模式(--research,10-16 加):批量研究跑量素材(尤其 AIGC)时追加的字段 ──
+# 不改上面的 SCHEMA:复刻下游 plan/tts/gen 只认标准字段;研究字段只追加不替换。
+# 借鉴外部 Codex 反推提示词三处:屏上文字分层归类不许漏 / 声音"身份·位置·性别"分开判 / 人物跨镜锚点。
+# 10-18 实测 seed-2-1-pro/turbo 偶发拼错 overall 的键名(implied_breaks/implied_bids/endorsor),
+# 下游按键名取值会静默丢字段 —— 缺哪个标准键,就把最像它的陌生键改回来。
+OVERALL_KEYS = ["product", "style", "narrative_arc", "why_viral", "full_transcript", "structure", "hook_type",
+                "endorser", "price_points", "implied_benefits", "disclaimers", "product_real_look", "voices", "persons"]
+
+
+def _fix_keys(d, std):
+    """10-18 全量统计 7480 段:implied_benefits 有 28% 被拼歪(implied_bbenefits/implied_bids/implied_buyers/
+    "implied_bene fits"...),还有前导空格的 "    product"。先去空白,再 implied* 归 implied_benefits,其余按相似度。"""
+    import difflib
+    if not isinstance(d, dict):
+        return False
+    hit = False
+    for k in list(d):
+        kk = re.sub(r"\s+", "", k)
+        if kk != k and kk not in d:
+            d[kk] = d.pop(k); hit = True
+    for k in [k for k in std if k not in d]:
+        odd = [x for x in d if x not in std]
+        if k == "implied_benefits":
+            m = [x for x in odd if x.startswith("implied")][:1]
+        else:
+            m = difflib.get_close_matches(k, odd, n=1, cutoff=0.6)
+        if m:
+            d[k] = d.pop(m[0]); hit = True
+    return hit
+
+
+# AI 判定的真值在 ai_footer_ocr.py(本地 OCR 读免责字幕);这里的 ai_suspect 只是辅助信号,
+# 10-16 实测 Seed 会把 AI 人物一律标"真人",所以只让它列【看得见的证据】,不让它下"是不是AI"的结论。
+RESEARCH_ADDON = """在上面结构的基础上追加以下字段(原字段一个不少):
+"overall" 里追加:
+ "structure": [{"start":0.0,"end":0.0,"beat":"钩子|场景人设|背书|质地展示|使用演示|成分卖点|价格机制|逼单|其他","summary":"这一段在说服什么"}],
+ "hook_type": "前3秒钩子类型(生活场景/产品特写/冲突剧情/价格冲击/明星/提问/反常画面…)+一句话机制",
+ "endorser": "背书人:明星/达人/专家/素人/无;台词或字幕点名的写出名字",
+ "price_points": "价格与机制原话(原价/现价/错过价/几瓶几箱/赠品/限时),无则空",
+ "implied_benefits": [{"benefit":"暗示的功效或结果","how":"画面演绎/半句话/字幕/台词明说","time":0.0,"evidence":"具体画面或原话"}],
+ "disclaimers": ["屏上出现过的每一种免责声明原文(常在画面最底部小字),逐字"],
+ "product_real_look": "片中真实拍摄的产品包装长什么样(材质/颜色/瓶型/盖子);全片都看不出就写'无法确定'",
+ "voices": [{"voice_id":"V1","gender":"女|男|儿童|无法区分","position":"画内|画外|旁白","nature":"真人录音|疑似TTS|疑似AI生成音|无法判断","evidence":"判断依据"}],
+ "persons": [{"person_id":"P1","look":"年龄段/发型/服装/体型,跨镜同一人用同一编号"}]
+"shots" 每一项追加:
+ "beat": "该镜在 structure 里属于哪一段",
+ "text_layers": {"subtitle":"对白字幕原文","selling_text":"卖点花字/大字原文","disclaimer":"底部免责声明原文","fixed_title":"长期不变的标题/贴片原文"},
+ "speakers": ["该镜台词的 voice_id"],
+ "person_ids": ["该镜出现的 person_id"],
+ "product_match_real": "一致|不一致-虚构包装|不一致-其他真实款|无实拍可比|无产品  (该镜产品外观和 product_real_look 比;虚构包装=现实里不存在的理想化瓶罐/乱码字,其他真实款=同品牌别的口味或旧款真品,常见于复用素材)",
+ "ai_signals": {"items":["包装与实拍不一致","包装文字畸变/乱码","手指或人体异常","液体或物理异常","背景扭曲或闪烁","人物跨镜漂移","质感过度光滑","口型或配音不自然"],"evidence":"只写看得见的具体证据,没有就 items 为空"}
+研究模式补充要求:
+A.屏上文字必须逐条归入 text_layers 四类之一,不许漏,不许因字号大/在片头片尾/像口号就丢;能连成口语句的随时间刷新文字归 subtitle。
+B.声音的身份、位置、性别分开判:身份不明不等于性别不明。
+C.同一人物换人需至少两项证据(脸、服装结构、体型、同框);只凭背影/单帧印象不新建 person_id。
+D.ai_signals 只列证据不下结论;不确定就空着,别为了填字段编证据。
+E.implied_benefits 只记有据的暗示:台词类必须逐字引用下方【已知台词】里的原话,画面类写具体看到的画面;不许补全、改写或推测没说出口的话,找不到就留空数组。
+"""
+
+# ── 画面元素清单(10-30 加,ins 健康号 1711 条):AI 片镜头少但画面元素密,复刻要逐件拆。
+#   只在 DAIHUO_VISUAL_DETAIL=1 时追加,标准管线不受影响。
+VISUAL_ADDON = """画面元素补充(这批视频画面元素很密,下游要逐件复刻,宁多勿漏):
+"overall" 里追加:
+ "visual_bible": {"palette":"全片主色/辅色/点缀色","set_design":"布景风格与固定陈设","wardrobe_rule":"人物造型规律","graphic_style":"屏幕图形统一样式(字体粗细/颜色/描边或底框/位置/出现方式)","camera_style":"机位与景别习惯","texture_quality":"画面质感(锐度/颗粒/光滑度/景深)"}
+"shots" 每一项追加:
+ "visual_elements": {
+   "background": [{"item":"物件","position":"画面位置(左上/右侧/背后…)","detail":"颜色/材质/形状/数量/状态"}],
+   "props": [{"item":"道具/食材/药品/器具","position":"…","detail":"颜色/材质/形状/大小/数量/状态变化/有无文字或标签(原文)"}],
+   "wardrobe": [{"person_id":"P1","top":"…","bottom":"…","accessories":"首饰/眼镜/手表/手套等","hair_makeup":"发型发色/妆容/胡须","skin_body":"肤色/年龄感/可见特征"}],
+   "graphics": [{"type":"字幕|大字标题|贴纸|emoji|箭头|圈注|进度条|画中画|logo|水印|其他","content":"原文或描述","style":"字体/字号感/颜色/描边或底框/大小写","position":"画面位置","motion":"出现与消失方式/动画"}],
+   "composition": "机位高度与角度/主体占画面比例/前中后景层次/是否分屏",
+   "changes": "这一镜内画面元素的变化过程(谁出现、谁消失、什么被移动或改变,按时间顺序)"
+ }
+要求:背景和道具逐件列,不许用'简洁背景''各种物品'概括;看不清的写'看不清'而不是省略;只描述不评判。
+"""
 
 
 def _stamp(d):
@@ -73,6 +161,8 @@ def _stamp(d):
                   "billing": _how,   # platform(按量) / agent-plan(套餐)
                   "profile": _os.environ.get("ARKCLI_PROFILE", "(未记录)"),
                   "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                  "seed_fps": _os.environ.get("DAIHUO_SEED_FPS") or "auto",
+                  "cut_gate": _os.environ.get("DAIHUO_CUT_GATE") or "default",
                   "by": _os.path.basename(__file__)}
     return d
 
@@ -110,16 +200,6 @@ SINGLE_TAKE_PROMPT = """这是一条竖屏带货短视频,时长 %.1f 秒。请�
 只返回 JSON,不要围栏:
 {"cut_count": 整数, "is_single_take": true/false, "confidence": "high|medium|low", "evidence": "一句话依据"}"""
 
-ADJUDICATE_PROMPT = """下图是 %d 组"候选剪辑点"的前后帧对照,从左到右、从上到下依次编号 1..%d。
-每组左边是候选时刻【前】0.15秒的画面,右边是【后】0.15秒的画面。
-
-判断每一组是不是**真的剪辑点**:
-- 真剪辑 = 机位/景别/构图/场景跳变,人物位置或姿态瞬间不连续
-- 假切点 = 只是手快速挥动、物体遮挡镜头、画面变速、光线闪变造成的画面突变(机位没变、场景没变)
-
-只返回 JSON,不要围栏:{"real": [真剪辑的编号], "fake": [假切点的编号]}"""
-
-
 def _ark_json(content, timeout=300):
     """调 Seed 拿 JSON。失败抛异常由调用方决定降级。
 
@@ -131,9 +211,11 @@ def _ark_json(content, timeout=300):
             "max_output_tokens": ARK_MAX_TOKENS,
             "input": [{"role": "user", "content": content}]}
     # ★套餐会 429 限流 / 偶发 5xx:递增退避重试(借 Kimi 线 _ark_plan_text,90/180/270s)
-    for att in range(4):
+    att = -1
+    while True:
+        att = min(att + 1, 3)
         try:
-            r = requests.post(ARK_URL, headers={"Authorization": f"Bearer {ark_endpoint()[1]}",
+            r = requests.post(_ark_url(), headers={"Authorization": f"Bearer {ark_endpoint()[1]}",
                               "Content-Type": "application/json"},
                               json=body, proxies={"http": None, "https": None},
                               timeout=(10, timeout), stream=True)
@@ -142,6 +224,22 @@ def _ark_json(content, timeout=300):
             r.raise_for_status()
             break
         except (RuntimeError, requests.ConnectionError, requests.Timeout) as e:
+            # ★10-20:套餐周限额用完后 429 会一直持续。重试 3 次仍是 429 就进入暂停等待:
+            #   每 30 分钟探一次,直到额度恢复。不抛错,免得把排队里剩下的视频全刷成 fail。
+            #   等待期间写标记文件 ARK_QUOTA_WAIT,方便外部巡检;要改走按量就设 DAIHUO_ARK_PLAN=0。
+            if att >= 2 and "HTTP 429" in str(e):
+                from config import ark_failover
+                if ark_failover():
+                    att = -1
+                    continue
+                mark = os.environ.get("ARK_QUOTA_MARK", "/mnt/g/有米研究/_分析/ARK_QUOTA_WAIT")
+                try:
+                    open(mark, "a").write(f"{time.strftime('%m-%d %H:%M')} {str(e)[:200]}\n")
+                except Exception:
+                    pass
+                print(f"  [ark 持续429,疑似限额] 30 分钟后再探: {str(e)[:120]}", file=sys.stderr, flush=True)
+                time.sleep(1800)
+                continue
             if att == 3:
                 raise
             w = 90 * (att + 1)
@@ -181,40 +279,116 @@ def probe_single_take(clip_path, duration):
     return single, d.get("confidence", "?"), d.get("evidence", "")
 
 
-def adjudicate_cuts(video, cands, workdir, max_cands=40):
-    """第②道闸:逐候选裁决真假。把"时序定位"转成"两帧比对"——时间由 ffmpeg 给,VLM 只看图。
-    候选过多(密集快剪)时不裁决,直接信 ffmpeg(那种片子本来就切得密,假阳影响小)。"""
-    if not cands or len(cands) > max_cands:
-        return cands, None
-    pairs = []
-    for i, t in enumerate(cands, 1):
-        a = os.path.join(workdir, f"cand{i}a.png"); b = os.path.join(workdir, f"cand{i}b.png")
-        run(["ffmpeg", "-y", "-ss", f"{max(0, t - 0.15):.3f}", "-i", video, "-frames:v", "1",
-             "-vf", "scale=160:-1", a, "-loglevel", "error"])
-        run(["ffmpeg", "-y", "-ss", f"{t + 0.15:.3f}", "-i", video, "-frames:v", "1",
-             "-vf", "scale=160:-1", b, "-loglevel", "error"])
-        pr = os.path.join(workdir, f"pair{i:02d}.png")
-        run(["ffmpeg", "-y", "-i", a, "-i", b, "-filter_complex",
-             f"[0:v]scale=160:284,drawtext=text='{i}':x=4:y=4:fontsize=20:fontcolor=yellow:"
-             f"box=1:boxcolor=black[l];[1:v]scale=160:284[r];[l][r]hstack", pr, "-loglevel", "error"])
-        pairs.append(pr)
-    sheet = os.path.join(workdir, "cand_sheet.png")
-    cols = min(4, len(pairs))
-    run(["ffmpeg", "-y", "-pattern_type", "glob", "-i", os.path.join(workdir, "pair*.png"),
-         "-filter_complex", f"tile={cols}x{-(-len(pairs)//cols)}:margin=4:padding=3",
-         sheet, "-loglevel", "error"])
-    b64 = base64.b64encode(open(sheet, "rb").read()).decode()
-    # ★Ark responses API 的图片:image_url 是【字符串】不是对象(对象会 400,08-10 实测)
-    d = _ark_json([{"type": "input_image", "image_url": f"data:image/png;base64,{b64}"},
-                   {"type": "input_text", "text": ADJUDICATE_PROMPT % (len(cands), len(cands))}])
-    real = set(int(x) for x in (d.get("real") or []) if 1 <= int(x) <= len(cands))
-    return [t for i, t in enumerate(cands, 1) if i in real], d
+# ★11-06 三帧裁决(吸收外部反推提示词后的实测定稿)。四条已知真值的片对比过三种写法:
+#   旧两帧 160px:把换衣服的明显切点判成假;外部"有跳变且接不上就算切":在写着
+#   "全程只加速不剪辑"的片上判出 6 个假切 —— 加速片的动作本来就没有连续帧。
+#   本版判据是【取景与持续状态】,不看动作。但单次视觉判断仍有约 15% 随机错,
+#   所以跑两遍做非对称投票(见 vote_cuts)。
+VOTE_PROMPT = """下图有 %d 组候选剪辑点,每组一行三帧:左=候选前约0.2秒,中=候选时刻,右=候选后约0.2秒,左上角黄字是组号和时刻。
+每组按顺序回答三件事,先观察再下结论,只看本组三帧,不要受相邻组影响:
+a.frame:背景(墙/门/家具/窗)相对画框的位置,左帧和右帧是否相同;机位、景别有没有变;分屏时逐格比较。
+b.state:持续状态是否突变 —— 服装、发饰、妆面、脸上的泡沫/面膜、场景、在场人数、桌上摆放的物品。这些东西不会在0.4秒内变掉。
+c.verdict:
+ real = a或b任一项发生变化(同一房间换了机位、换了衣服、泡沫突然没了,都算;分屏里任一格内容换了也算);
+        或背景不动但人物整体大小/位置突跳(同机位跳剪)。
+ fake = 背景和取景不变、持续状态不变,变化的只有手、手里的道具、表情、肢体。
+        ★这类片常常是加速播放,手和道具瞬移、纸巾突然出现、肢体跳位都是加速造成的,不算剪辑。
+ 字幕、花字的出现消失一律不算证据。
+组号从 %d 到 %d。只返回JSON:{"rows":[{"id":1,"frame":"相同|变了+哪里","state":"不变|变了+什么","verdict":"real|fake"}]}"""
+VOTE_PAGE = 6            # 每页 6 组 ≈ 18 帧 360p;再多模型会串组
+VOTE_MAX = 120           # 超过这个数按片子切得极密处理,不再逐个问
 
 
-def smart_cuts(video, duration, clip_path, thresh=0.15, low=0.08, workdir=".", verbose=True):
-    """两道闸合起来:粗判一镜到底 → 阈值分歧检测 → 必要时逐候选裁决。
+def merge_cands(ts, gap=0.12):
+    """同一次物理切换常连报两个时刻(张九九 11.6/11.7 实为一刀),不并就多出 0.1 秒幽灵镜。
+    取组内最早时刻当切点。0.12 而不是 0.08:30fps 下 3 帧内的都是同一刀,实测 0.08 盖不住。"""
+    out = []
+    for t in sorted(ts):
+        if out and t - out[-1][-1] <= gap:
+            out[-1].append(t)
+        else:
+            out.append([t])
+    return [g[0] for g in out]
+
+
+def _vote_sheet(video, ts, base_id, path):
+    from PIL import Image, ImageDraw
+    rows = []
+    for i, t in enumerate(ts):
+        fs = []
+        for j, dt in enumerate((-0.2, 0.02, 0.2)):
+            fp = f"{path}.{i}{j}.jpg"
+            run(["ffmpeg", "-nostdin", "-y", "-ss", f"{max(0, t + dt):.3f}", "-i", video, "-frames:v", "1",
+                 "-vf", "scale=-2:360", fp, "-loglevel", "error"])
+            if os.path.exists(fp):
+                fs.append(Image.open(fp).convert("RGB"))
+                os.remove(fp)
+            elif fs:
+                fs.append(fs[-1])        # 候选贴着段尾,后 0.2 秒已过片尾(11-06 批量分段实撞):用最后抽到的帧顶
+            else:
+                raise RuntimeError(f"候选 {t} 抽不到帧")
+        r = Image.new("RGB", (sum(f.width for f in fs) + 8, fs[0].height), "white")
+        x = 0
+        for f in fs:
+            r.paste(f, (x, 0)); x += f.width + 4
+        d = ImageDraw.Draw(r)
+        d.rectangle([0, 0, 62, 18], fill="black")
+        d.text((4, 4), f"{base_id + i} {t:.2f}", fill="yellow")
+        rows.append(r)
+    W, H = rows[0].size
+    s = Image.new("RGB", (2 * (W + 10), -(-len(rows) // 2) * (H + 10)), "white")
+    for i, r in enumerate(rows):
+        s.paste(r, ((i % 2) * (W + 10), (i // 2) * (H + 10)))
+    s.save(path, quality=85)
+
+
+def vote_cuts(video, cands, strong, workdir, passes=2):
+    """★候选闭环:每个候选都要有结论,结论和依据留档(cut_audit)。
+    强候选(高阈值也命中)一律保留,两票都判假只标 disputed 交人看;弱候选(只有低阈值命中)两票全判真才收。
+    ★模型判假不可信(11-06 实测):它会批量答"相同/不变",把换衣服、换场景的明显真切
+      (张九九 3.0、大明白 25.77)两票都判假;判真时才给得出具体证据。所以投票只能收,不能删。
+    一镜到底靠闸①兜,不靠这里。返回 (保留的切点, audit)。"""
+    audit_dir = os.path.join(workdir, "_cut_audit")
+    os.makedirs(audit_dir, exist_ok=True)
+    votes = {t: [] for t in cands}
+    notes = {t: [] for t in cands}
+    pages = [cands[i:i + VOTE_PAGE] for i in range(0, len(cands), VOTE_PAGE)]
+    for n, pg in enumerate(pages):
+        sheet = os.path.join(audit_dir, f"p{n:02d}.jpg")
+        first = n * VOTE_PAGE + 1
+        _vote_sheet(video, pg, first, sheet)
+        b64 = base64.b64encode(open(sheet, "rb").read()).decode()
+        for _ in range(passes):
+            d = _ark_json([{"type": "input_image", "image_url": f"data:image/jpeg;base64,{b64}"},
+                           {"type": "input_text", "text": VOTE_PROMPT % (len(pg), first, first + len(pg) - 1)}])
+            for row in d.get("rows") or []:
+                try:
+                    t = pg[int(row["id"]) - first]
+                except (KeyError, ValueError, TypeError, IndexError):
+                    continue
+                if int(row["id"]) < first:
+                    continue
+                votes[t].append(row.get("verdict"))
+                notes[t].append(f"{row.get('frame', '')}/{row.get('state', '')}")
+    keep, audit = [], []
+    for t in cands:
+        v = votes[t]
+        is_strong = t in strong
+        missing = len(v) < passes                    # 模型漏答的组按默认处理,不当作判假
+        kept = is_strong or ((not missing) and all(x == "real" for x in v))
+        if kept:
+            keep.append(t)
+        audit.append({"t": t, "strong": is_strong, "votes": v, "kept": kept,
+                      "disputed": is_strong and not missing and all(x == "fake" for x in v),
+                      "evidence": notes[t][:2]})
+    return keep, audit
+
+
+def smart_cuts(video, duration, clip_path, thresh=0.15, low=0.08, workdir=".", verbose=True, audit=None):
+    """两道闸合起来:粗判一镜到底 → 候选逐个投票裁决。
+    audit 传 list 时把每个候选的结论写进去(候选闭环)。
     任一步失败都降级回 ffmpeg 默认阈值(但会响亮告警,别静默)。"""
-    base = detect_cuts(video, thresh)
+    base = merge_cands(detect_cuts(video, thresh))
     try:
         single, conf, ev = probe_single_take(clip_path, duration)
         if verbose:
@@ -225,20 +399,29 @@ def smart_cuts(video, duration, clip_path, thresh=0.15, low=0.08, workdir=".", v
             return []
     except Exception as e:
         print(f"[闸①][⚠失败,降级用ffmpeg] {type(e).__name__}: {str(e)[:80]}", file=sys.stderr)
-    lowc = detect_cuts(video, low)
-    ratio = (len(lowc) / max(1, len(base))) if base else (999 if lowc else 1)
+    # 低阈值候选一律过投票,不再按"两阈值差不到 2 倍就全信"放行:那条路会把弱候选无声丢掉
+    lowc = merge_cands(sorted(set(detect_cuts(video, low)) | set(base)))
+    strong = {t for t in lowc if any(abs(t - b) <= 0.12 for b in base)}
+    weak = len(lowc) - len(strong)
     if verbose:
-        print(f"[闸②] 阈值{thresh}→{len(base)}刀 / {low}→{len(lowc)}刀 (×{ratio:.1f})", flush=True)
-    if ratio < 2.0:
-        return base                       # 两阈值一致,信 ffmpeg
+        print(f"[闸②] 阈值{thresh}→{len(base)}刀 / {low}→{len(lowc)}个候选(强{len(strong)} 弱{weak})", flush=True)
+    if not weak:
+        return base                       # 没有分歧,信 ffmpeg,省两次调用
+    if len(lowc) > VOTE_MAX:
+        print(f"[闸②][⚠] 候选 {len(lowc)} 个过多,跳过裁决,信 {thresh} 的 {len(base)} 刀", flush=True)
+        return base
     try:
-        real, _ = adjudicate_cuts(video, lowc, workdir)
-        if real is not None and len(lowc) <= 40:
-            if verbose:
-                print(f"[闸②] 裁决:{len(lowc)} 个候选中 {len(real)} 个是真剪辑", flush=True)
-            return real
+        real, aud = vote_cuts(video, lowc, strong, workdir)
+        if audit is not None:
+            audit.extend(aud)
         if verbose:
-            print(f"[闸②] 候选 {len(lowc)} 个过多,跳过裁决,信 {thresh} 的 {len(base)} 刀", flush=True)
+            add = sum(1 for x in aud if not x["strong"] and x["kept"])
+            dis = [x["t"] for x in aud if x.get("disputed")]
+            print(f"[闸②] 投票:{len(lowc)} 个候选留 {len(real)} 刀(弱候选收 {add})"
+                  f",对照图在 {workdir}/_cut_audit/", flush=True)
+            if dis:
+                print(f"[闸②][存疑] 这些强切点两票都判假,已保留,人看一眼对照图:{dis}", flush=True)
+        return real
     except Exception as e:
         print(f"[闸②][⚠失败,降级用ffmpeg] {type(e).__name__}: {str(e)[:80]}", file=sys.stderr)
     return base
@@ -257,15 +440,25 @@ def make_upload_clip(video, scale, keep_audio, workdir):
     """压成小体积供 base64 上传"""
     out = os.path.join(workdir, "_seed_upload.mp4")
     vf = f"scale={scale}:-2"
-    cmd = ["ffmpeg", "-y", "-i", video, "-vf", vf,
-           "-c:v", "libx264", "-crf", "30", "-preset", "veryfast"]
-    cmd += (["-c:a", "aac", "-b:a", "48k"] if keep_audio else ["-an"])
-    cmd += [out, "-loglevel", "error"]
-    run(cmd)
+    aud = ["-c:a", "aac", "-b:a", "48k"] if keep_audio else ["-an"]
+    from ff_slot import encode   # 10-30:显卡编码优先、满了走 CPU,全机限并发(防 CPU/内存被打满)
+    encode(lambda venc: ["ffmpeg", "-nostdin", "-y", "-i", video, "-vf", vf, *venc(30), *aud,
+                         out, "-loglevel", "error"],
+           lambda cmd: run(cmd).returncode == 0 and os.path.getsize(out) > 0)
     return out
 
 
-def ark_reverse(clip_path, cuts, duration, timeout=600):
+def seed_fps(duration):
+    """★Seed 默认约 1 帧/秒,快动作会漏(11-06 耶耶大王实测:默认漏掉 4.4 秒擦鼻和 5.2 秒惊讶反应,
+    fps=4 全抓到,时间精到 0.1 秒,耗时不增)。长片降档防输出和上下文撑爆。
+    研究模式批量跑上千条,不走这里,保持默认;要提高就显式设 DAIHUO_SEED_FPS。"""
+    v = os.environ.get("DAIHUO_SEED_FPS")
+    if v:
+        return float(v)
+    return 4 if duration <= 30 else 2 if duration <= 90 else 1
+
+
+def ark_reverse(clip_path, cuts, duration, timeout=600, research=False, transcript=None, product_ref=None):
     """调 Seed 2.1 Pro 原生视频反推,返回 JSON 文本"""
     key = ark_endpoint()[1]
     b64 = base64.b64encode(open(clip_path, "rb").read()).decode()
@@ -286,21 +479,59 @@ def ark_reverse(clip_path, cuts, duration, timeout=600):
         f"5.材质/颜色写死。只描述不评判。"
         f"6.台词只收录真实人声:只出现在字幕/花字上而无对应人声的文字(短视频开头常有静音字幕残留),"
         f"只进 onscreen_text,严禁写进 dialogue 和 full_transcript。"
-        f"7.onscreen_text 逐句原样采集屏上每条字幕/花字(保留自动字幕的错字),句间用;分隔。")
+        f"7.onscreen_text 逐句原样采集屏上每条字幕/花字(保留自动字幕的错字),句间用;分隔。"
+        f"8.看不清的宁可写空,不要为了填字段编细节。同一人物跨镜沿用同一描述,换人至少要脸、服装结构、体型、同框里两项证据,"
+        f"只凭背影或单帧印象不算换人。9.歌曲演唱归背景音乐,不进 dialogue。")
+    if research:
+        prompt += "\n\n" + RESEARCH_ADDON
+        if os.environ.get("DAIHUO_VISUAL_DETAIL") == "1":
+            prompt += "\n\n" + VISUAL_ADDON
+    if transcript is not None:
+        # 台词真值来自独立 ASR(asr_volc.py):Seed 只对齐、归属,不再自己转写(10-16 校准:它会脑补功效台词)
+        lines = "\n".join(f"[{u['start']}-{u['end']}] {u['text']}" for u in transcript) or "(本段无人声)"
+        prompt += ("\n\n【已知台词】(独立语音识别结果,时间单位秒,以此为准):\n" + lines +
+                   "\n要求:dialogue 和 full_transcript 只能使用上面的原句按时间分配到镜头,不许增改字;"
+                   "只有确属歌曲歌词的句子可以剔除。你只负责对齐和判断说话人。")
+    if product_ref:
+        prompt += ("\n\n【真实产品参照】同一条视频的实拍片段里,真实产品外观为:" + product_ref +
+                   "\nproduct_real_look 照抄这个参照,product_match_real 以它为准比对。")
     body = {
         "model": ARK_MODEL,
         "input": [{"role": "user", "content": [
-            {"type": "input_video", "video_url": f"data:video/mp4;base64,{b64}"},
+            {"type": "input_video", "video_url": f"data:video/mp4;base64,{b64}",
+             **({} if research and not os.environ.get("DAIHUO_SEED_FPS") else {"fps": seed_fps(duration)})},
             {"type": "input_text", "text": prompt}]}],
         "thinking": {"type": "disabled"},     # ★关键:关推理 → 快17倍,精度不掉
         "max_output_tokens": ARK_MAX_TOKENS,  # ★长片/多镜头会撞默认上限被截断(见文件头注释)
         "stream": True,
     }
     t0 = time.time()
-    r = requests.post(ARK_URL,
-                      headers={"Authorization": f"Bearer {key}",
-                               "Content-Type": "application/json"},
-                      json=body, proxies=NO_PROXY, timeout=(10, timeout), stream=True)
+    n429 = 0
+    while True:
+        key = ark_endpoint()[1]   # 每轮现取:等待期间可能已切到 Coding Plan
+        r = requests.post(_ark_url(),
+                          headers={"Authorization": f"Bearer {key}",
+                                   "Content-Type": "application/json"},
+                          json=body, proxies=NO_PROXY, timeout=(10, timeout), stream=True)
+        if r.status_code != 429:
+            break
+        # ★10-20 限额保护(同 _ark_json):连续 3 次 429 后转入每 30 分钟探一次,不抛错
+        n429 += 1
+        msg = r.text[:200]
+        if n429 < 3:
+            time.sleep(90 * n429)
+            continue
+        from config import ark_failover
+        if ark_failover():
+            key, n429 = ark_endpoint()[1], 0
+            continue
+        try:
+            open(os.environ.get("ARK_QUOTA_MARK", "/mnt/g/有米研究/_分析/ARK_QUOTA_WAIT"), "a").write(
+                f"{time.strftime('%m-%d %H:%M')} {msg}\n")
+        except Exception:
+            pass
+        print(f"  [ark 持续429,疑似限额] 30 分钟后再探: {msg[:120]}", file=sys.stderr, flush=True)
+        time.sleep(1800)
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text[:300]}")
     txt = ""
@@ -326,7 +557,19 @@ def extract_json(txt):
     if s.startswith("```"):
         s = re.sub(r"^```\w*", "", s).rsplit("```", 1)[0].strip()
     a, b = s.find("{"), s.rfind("}")
-    return json.loads(s[a:b + 1])
+    try:
+        return json.loads(s[a:b + 1])
+    except json.JSONDecodeError:
+        # 10-30:画面元素清单让输出涨到 1.4 万字,偶见 "detail":": " 这类坏 JSON(约 5%),整段重跑要 2 分钟 → 先修
+        try:
+            import json_repair
+        except ImportError:
+            raise
+        d = json_repair.loads(s[a:b + 1])
+        if not isinstance(d, dict) or not d.get("shots"):
+            raise
+        print("[seed_reverse] JSON 有坏点,已用 json_repair 修复", file=sys.stderr)
+        return d
 
 
 def asr_check(video, data, workdir):
@@ -369,25 +612,55 @@ def asr_check(video, data, workdir):
 
 
 def reverse(video, out=None, cuts=None, scene_thresh=0.15, scale=480, cut_probe=True,
-            keep_audio=True, timeout=600):
+            keep_audio=True, timeout=600, research=False, transcript=None, product_ref=None):
     vi = video_info(video)
     _auto = cuts is None
     workdir = os.path.dirname(os.path.abspath(out)) if out else os.path.dirname(os.path.abspath(video))
     os.makedirs(workdir, exist_ok=True)
     clip = make_upload_clip(video, scale, keep_audio, workdir)
+    cut_audit = []
     if _auto:
-        cuts = (smart_cuts(video, vi["duration"], clip, scene_thresh, workdir=workdir)
+        cuts = (smart_cuts(video, vi["duration"], clip, scene_thresh, workdir=workdir, audit=cut_audit)
                 if cut_probe else detect_cuts(video, scene_thresh))
+    if transcript is None and keep_audio and not research:
+        # ★台词以独立 ASR 为准(研究模式 10-16 校准过,标准流程一直没接):Seed 只对齐和归属。
+        #   没 key 或调用失败就退回旧路(Seed 自己转写 + 下面的 asr_check 核对),不挡开工。
+        try:
+            from asr_volc import transcribe
+            transcript = transcribe(video)
+            print(f"[seed_reverse] 台词真值:豆包 ASR {len(transcript)} 句", flush=True)
+        except Exception as e:
+            print(f"[seed_reverse][⚠] 豆包 ASR 没跑成({type(e).__name__}: {str(e)[:80]}),"
+                  "退回 Seed 自己转写 + whisper 核对", flush=True)
     print(f"[seed_reverse] {vi['duration']}s {vi['width']}x{vi['height']} | "
           f"{len(cuts)}硬切 | clip {os.path.getsize(clip)//1024}KB", flush=True)
-    raw, secs = ark_reverse(clip, cuts, vi["duration"], timeout)
+    raw, secs = ark_reverse(clip, cuts, vi["duration"], timeout, research, transcript, product_ref)
     print(f"[seed_reverse] Seed 2.1 Pro 返回 {len(raw)}字 / {secs}s", flush=True)
-    data = extract_json(raw)
+    try:
+        data = extract_json(raw)
+    except ValueError:
+        # 长片硬切多时输出易写坏 JSON;先落盘原文,免得几分钟的调用白烧
+        rawp = (out or os.path.join(workdir, "shotlist.json")) + ".raw.txt"
+        open(rawp, "w").write(raw)
+        print(f"[seed_reverse] JSON 解析失败,原文已存 {rawp}", flush=True)
+        raise
+    # 11-06:json_repair 救回的是"写到哪算哪",输出断在中途也不报错(第二批 682 段有 3 段丢了尾部,最多丢 18 秒)
+    shots = data.get("shots") or []
+    last_end = max((s.get("end") or 0 for s in shots if isinstance(s, dict)), default=0)
+    if last_end < vi["duration"] - 1:
+        rawp = (out or os.path.join(workdir, "shotlist.json")) + ".raw.txt"
+        open(rawp, "w").write(raw)
+        raise RuntimeError(f"反推只覆盖到 {last_end}s / {vi['duration']}s,输出疑似截断,原文存 {rawp}")
     data.setdefault("video_info", vi)
     data["cuts"] = cuts
+    if cut_audit:
+        data["cut_audit"] = cut_audit
+    _fix_keys(data.get("overall"), OVERALL_KEYS if research else OVERALL_KEYS[:5])   # 11-06 标准流程也撞(why_viral_hook)
+    if research:
+        data.setdefault("_research", True)
     out = out or os.path.join(workdir, "shotlist.json")
     _stamp(data)
-    chk = asr_check(video, data, workdir) if keep_audio else None
+    chk = asr_check(video, data, workdir) if keep_audio and transcript is None else None
     if chk:
         data["_meta"]["dialogue_check"] = chk
     json.dump(data, open(out, "w"), ensure_ascii=False, indent=2)
@@ -408,11 +681,16 @@ if __name__ == "__main__":
                          "只用 ffmpeg 单阈值。--cuts 显式给定时本就不走闸")
     ap.add_argument("--no-audio", action="store_true")
     ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--research", action="store_true",
+                    help="研究模式:追加结构段落/背书/价格/暗示功效/免责/声音/人物/AI信号字段(原字段不变)")
+    ap.add_argument("--transcript", help="台词真值 JSON([{start,end,text}],时间相对本视频);给了就不让 Seed 自己转写")
+    ap.add_argument("--product-ref", help="真实产品外观参照文字(研究模式比对包装一致性用)")
     a = ap.parse_args()
     __import__("config").guard_args(a, "seed_reverse")   # 输出不许落进 skill 目录(project.py init 建项目文件夹)
     cuts = [float(x) for x in a.cuts.split(",")] if a.cuts else None
     d = reverse(a.video, a.out, cuts, a.scene_thresh, a.scale, not a.no_cut_probe,
-                not a.no_audio, a.timeout)
+                not a.no_audio, a.timeout, a.research,
+                json.load(open(a.transcript)) if a.transcript else None, a.product_ref)
     o = d["overall"]
     print("\n  product:", o.get("product", "")[:80])
     print("  why_viral:", o.get("why_viral", "")[:100])

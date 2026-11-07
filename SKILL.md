@@ -1,6 +1,6 @@
 ---
 name: daihuo-fanpai
-description: 复刻/仿拍爆款带货短视频 —— 反推目标视频分镜,用即梦(Seedance)重新生成镜头,配音拼接成片。A模式(忠实复刻:原台词原产品) / B模式(跨类目迁移:换产品+千川本地化脚本) / C模式(没有目标视频:从例文卡库选模板直生)。触发:复刻带货视频、仿拍爆款、把这条视频用我的产品重做、抖音带货素材复刻、即梦复刻、穿搭/换装复刻、舞蹈/动作复刻、照着这条视频的动作换人重拍。
+description: 复刻/仿拍爆款带货短视频 —— 反推目标视频分镜,用即梦(Seedance)重新生成镜头,配音拼接成片。A模式(忠实复刻:原台词原产品) / B模式(跨类目迁移:换产品+千川本地化脚本) / C模式(没有目标视频:从例文卡库选模板直生) / D模式(换头测试:AI开头接老主体上千川实投,开头台账回灌)。触发:换开头测试、AI开头接主体、千川素材换头、开头台账、复刻带货视频、仿拍爆款、把这条视频用我的产品重做、抖音带货素材复刻、即梦复刻、穿搭/换装复刻、舞蹈/动作复刻、照着这条视频的动作换人重拍。
 tags: [复刻, 仿拍, 带货视频, 短视频, 即梦, seedance, 视频生成, 千川, 剪映草稿, 群戏, 动作复刻, 深度图]
 version: 2.0
 status: verified
@@ -14,11 +14,11 @@ updated: 2026-07-13
 
 引擎在本目录(可插拔,换实现只改单个文件):
 `seed_reverse.py` 反推 · `merge_reverse.py` 双反推合并 · **`route.py` 判片型(决定后续生成方式)** · `plan_segments.py` 规划 · `h3_prompt.py` 海螺提示词生成 · **`director.py` 约束维度检查(生成前最后一道闸)** · `seam_pick.py` 一镜到底续接挑缝 · `cut_audio.py` 原音切段(≥2s闸+timing.json) · `patch_cast.py` 群戏/多人补丁(人数硬约束) · `gen_segments.py` 生成 · `qc_assets.py` **资产入库闸(机械层+VLM层+图⇄文对账,提交前把参考图本身查一遍)** · `qc_lipsync.py` 帧级口型质检 · `qc_defects.py` 四类缺陷定量抽帧 · `grid_off.py` 多卷同网格对照 · `is_speech.py`/`voice_cmp.py` 音轨判据 · `tts_segments.py` 配音 · `assemble.py` 装配 · `deliver.py` 交付(剪映草稿/成品) · `doctor.py` 体检。
-生成后端(可插拔,契约 `submit_*()->tid` / `wait_download(tid,dst)->(size,usage)`):即梦CLI(内置) · **`mmh3_gen.py` MiniMax H3 官方规范(秘塔渠道,h3 首选)** · `ark_gen.py` 火山 · `xyq_gen.py` 小云雀 · `rh_gen.py` RunningHub海螺h3(同模型贵4.4倍,已退役) · `rhdh_gen.py` RunningHub 数字人(**整条口播片直通**,单主播对镜口播片型用,跳过反推/规划/TTS;30 分钟片约 ¥95,钱包计费先征得用户同意)。
+生成后端(可插拔,契约 `submit_*()->tid` / `wait_download(tid,dst)->(size,usage)`):即梦CLI(内置) · **`libtv_gen.py` LibTV 画布(Seedance 2.0/2.5,积分计费,即梦不可用时改道)** · **`mmh3_gen.py` MiniMax H3 官方规范(秘塔渠道,h3 首选)** · `ark_gen.py` 火山 · `xyq_gen.py` 小云雀 · `rh_gen.py` RunningHub海螺h3(同模型贵4.4倍,已退役) · `rhdh_gen.py` RunningHub 数字人 **v4**(10-19 起「YZ金鱼-超自然商业数字人v4」,H3 内核,1~6 张参考图+锁音频;**整条口播片直通**,单主播对镜口播片型用,跳过反推/规划/TTS;单段 ≤30 秒自动分段;参数 megapixels/步数/调度器见脚本头;v3 的 ¥95/30 分钟是旧价,v4 待实测;钱包计费先征得用户同意)。
 
 > **要改造/换引擎/接手本 skill?先读 `DESIGN.md`**(设计理由 + 数据契约 + 扩展点)。参考样例在 `references/`。
 
-## 两种模式
+## 四种模式
 
 - **A·忠实复刻**:目标=原原本本复刻(台词原样、产品同一个)。不改脚本、不接千川。本文件覆盖。
 - **B·跨类目迁移**:换成用户产品 + 千川方法论本地化台词。B 在 A 基础上,于「规划」后、「配音」前插入**脚本本地化**一步,只改 `segments.json` 的 `dialogue` 字段(接口不变,A 的引擎一行不动)。
@@ -34,6 +34,14 @@ updated: 2026-07-13
   - 选卡:同品类(归一类目 `cat`)硬加分 > 时长贴近 > 已验 > 结构丰富;判废卡和非带货卡不参选。`--card <id>` 可指定。
   - 时长只对用户目标校验(给了"15-20s"就只认它);台词里读法有歧义的地方模型会直接写 `<屏上|念法>`。
   - 旧品名/品牌/产地/机制数字黑名单,残留即打回重写。
+
+- **D·换头测试(千川实投,11-01 从海参测试收拢)**:不复刻整条,只用 AI 做 5～15 秒开头,接号上已跑过的老主体,上千川实投、按数据挑开头。
+  一个开头接多个主体;判定看 3 秒播放率不看点击率;每天日报进开头台账回灌选题。**完整流程、口径、规矩见 `huantou/README.md`**。
+  ```
+  python3 huantou/open_post.py 生成.mp4 台词.txt 开头.mp4 --key 关键词   # 1.1倍速+字幕+AI小字+切点,打印ASR必须逐句回听
+  python3 huantou/join_open.py 开头.mp4 主体.mp4 成片.mp4                 # 接主体+两遍去停顿+ASR回听
+  python3 huantou/ledger/build_ledger.py <投放数据目录>                    # 开头台账
+  ```
 
 ## 例文卡库 + 资产库(10-09 从 Kimi 线适配)
 
@@ -119,8 +127,10 @@ python3 <engine>/project.py init --dir "用户指定的位置" --name 西梅早�
 
 ```
 1 反推  python3 seed_reverse.py <video> --out run/shotlist.json
-        → Seed2.1Pro原生视频,一次出:硬切分镜+台词转写+对齐+product_role+key_colors
+        → Seed2.1Pro原生视频,一次出:硬切分镜+台词对齐+product_role+key_colors+动作阶段/姿态/微表情/说话方式
         → 场景检测默认0.15(0.3会漏同机位跳剪);台词硬规:无人声的字幕/花字只进onscreen_text
+        → ★台词真值走豆包 ASR,Seed 只对齐(没 key 或失败才退回 Seed 转写+whisper 核对);采样 ≤30s 4帧/秒、≤90s 2帧/秒
+        → ★打印了「[闸②][存疑]」就看 run/_cut_audit/ 的对照图,判假的切点要手动从 cuts 里去掉再 --cuts 重跑
 1b 双反推(可选,重要投放片推荐——反推多花的token省的是Seedance重抽的钱)
         python3 k3_reverse.py <video> --out run/shotlist_k3.json
         → Kimi K3 API腿(同SCHEMA同切点源,可与第1步并行后台跑;K3全程开思考,慢,必后台)
@@ -244,7 +254,8 @@ python3 <engine>/project.py init --dir "用户指定的位置" --name 西梅早�
         → ★**即梦默认档=`seedance2.0` 非VIP慢速排队**(8积分/秒,比VIP便宜43%)。代价是真排队
           (实测18分钟起),轮询预算已自动放到60分钟;超时不代表失败,submit_id 在 meta.json 可补抓。
           急件/要1080p·4k → `--jimeng-model seedance2.0_vip`;长段不想切碎 → `seedance2.5`(26积分/秒,时长上限30s)。
-        → **五条生成腿**:即梦CLI(季卡12320积分/月,产品形体锚定最准) | 火山Ark(--i2v-backend ark,按token,★含人脸参考图政策级拦截,只走纯产品i2v) | 小云雀(--i2v-backend xyq,独立credits池) | RunningHub海螺h3(--i2v-backend rh / --mm-backend rh,钱包≈¥0.48/秒)。CLI积分紧张时把i2v卸给Ark/小云雀省池子。
+        → ★**即梦 CLI 用不了时**:`--auto-leg --jimeng-via libtv`,jimeng/jimeng25 段改走 LibTV 的 Seedance 2.0/2.5,其余段不变。也可在 segments.md 把单段 leg 写成 `libtv`/`libtv25`,或用 `--i2v-backend libtv --mm-backend libtv` 全片走
+        → **六条生成腿**:即梦CLI(季卡12320积分/月,产品形体锚定最准) | LibTV(Seedance 2.0/2.5,积分计费,2.5 约46积分/秒,跑前先报总价,720p 封顶;⚠参考音频会被重新出声,可能晚约0.4秒、吞字补字,人物口播段未实测,先单段验再批量) | 火山Ark(--i2v-backend ark,按token,★含人脸参考图政策级拦截,只走纯产品i2v) | 小云雀(--i2v-backend xyq,独立credits池) | RunningHub海螺h3(--i2v-backend rh / --mm-backend rh,钱包≈¥0.48/秒)。CLI积分紧张时把i2v卸给Ark/小云雀省池子。
         → ★**口播mm段有两条腿**:即梦(默认,口型最稳)和海螺h3(--mm-backend rh,audioUrls驱动口型,08-07参阿婆46s片实证)。积分耗尽时口播不再卡死,但要花钱且首用须跑 qc_lipsync 验收。
         → ★走 h3 腿(mmh3/rh)前先跑 `h3_prompt.py`(下方 2.5 步)出六段式提示词,别拿即梦的中文提示词硬喂
         → ★用 h3 腿前先读 `references/h3/README.md`:**审查只审prompt文本不审图/音→台词一律不进prompt**、产物多送0.5s尾帧、结果URL只活24h、Ref2VA六段式提示词与 [Shot N] At MM:SS.mmm 段内调度。
@@ -371,8 +382,33 @@ python3 run_state.py run/clips reuse S3 --key <key>         # 显式复用片库
 画外音时段张嘴率 9% / 17% / 55%;换 hypit 模板结构也没改善(均值 40% vs 27%,n=3)。
 验收用 `qc_offmouth.py <dir>`(按实际说话窗抽帧 + 盲评网格),挑完 `run_state accept` 中选那卷、`reject` 其余。
 
+## 研究模式:跑量素材批量拆解(10-16,`batch_research.py`)
+不是复刻,是**研究**——一文件夹几百条跑量素材(如有米有数下的 AIGC 素材)批量拆出结构/背书/价格/暗示功效/AI 段,汇成一张表。
+```
+python3 batch_research.py <素材夹> <输出夹> [--workers 4] [--gap 15]   # 断点续跑,挂了重跑同一条
+```
+每条四层,各管各的真值:
+- **台词** = `asr_volc.py` 豆包 ASR(Seed 只做对齐与说话人归属)。10-16 校准:让 Seed 自己转写时,提示词一提"功效暗示"它就脑补("说话嘴里都没味了"→"上厕所很顺")。
+- **AI 段确证** = `ai_footer_ocr.py` 读底部免责小字(本地 rapidocr,不花 token)。免责文案**换了一种**就是分界,即使没写"AI"(v3)。
+- **AI 段推断** = Seed 研究字段 `product_match_real`:每条先跑最后一段拿真品外观,再带参照跑前面。校准 v1–v3 秒级零误报零漏报(含无免责字幕的 v2);"不一致-其他真实款"多是复用别的 SKU 的素材,不等于 AI。
+- **结构/背书/价格/暗示/声音/人物** = `seed_reverse.py --research`(只追加字段,复刻下游契约不变)。
+汇总 `summary.csv` 关键列:explicit_ai_ratio / switch_points / ai_suspect_ratio / fake_package_ratio / voice_only_ratio(口播有字幕无的比例)+ voice_only_lines / endorser / price_points / implied_benefits / structure。
+坑:火山套餐 429 `RequestBurstTooFast` 看的是请求增长速度 → 全局节流 `--gap`,撞 429 自动冷却 90s 并拉大间隔;rapidocr 默认吃满全部核,已限每进程 2 线程(`OCR_THREADS`)。
+
+## 反推精度(11-06,评估外部反推提示词后定的)
+
+外部那份长提示词(每秒 4 帧、候选逐组闭环、有跳变就保留)拿四条已知真值的片实测过。吸收了下面这些,其余没收:
+
+- **细节精度靠采样帧率,不靠规则。** Seed 默认约 1 帧/秒,耶耶大王漏 4.4 秒擦鼻、5.2 秒惊讶反应,还编出水流。`fps` 参数拉到 4 全部修好,耗时不增(`seed_fps`)。研究模式不走这条,批量要提高设 `DAIHUO_SEED_FPS`。
+- **切点投票只收不删。** 候选先合并(0.12 秒内算一刀),闸①判非一镜到底后:强候选(0.15 命中)全留,两票都判假只标存疑;弱候选(只有 0.08 命中)两票都判真才收。依据:模型判假不可信,会批量答"相同/不变",把换衣服换场景的真切判假。结论和对照图在 `shotlist.cut_audit` 与 `run/_cut_audit/`。
+- **没收"有跳变且接不上就算切"。** 在写着"全程只加速不剪辑"的片上,它判出 6 个假切:加速片的动作本来就没有连续帧。裁决看取景和持续状态(服装/发饰/泡沫/桌面物品),不看动作。
+- **新字段:** `action_stages`(长镜拆段按它裁动作、分界贴阶段边界,不切断一个动作)· `posture` · `micro_expression` · `delivery` · `voice_type`(talking 段用它定性别措辞)· `background_motion`。
+- ⚠**`posture/micro_expression/delivery/background_motion` 还没进生成模板**,只摆在 segments.md 给人审和手改提示词。动模板要先单段 A/B。
+- **没收的还有:** 字幕兜底恢复台词(我们有 ASR)、"参考图文字不继承"(和包装文字必须动真图冲突)、默认固定机位(09-04 实测模型本来就爱偷懒写"固定")、整套 Shell/运行清单规则(那是给聊天沙箱写的)。
+
 ## 关键规则(写提示词/生成时)
 
+- **即梦腿提示词按 `seedance-prompt` skill 写**:2.0 用镜头序号不写秒数,台词写进所在镜头,外语台词写语种。详见下方同名章节。
 - **转换必带全「主体+动作」**:反推里"手把海参掰开"这类动作,写提示词时必须原样带上,别概括成"海参剖面"(否则怼静态内脏→诡异)。plan_segments 已结构性保证 + 完备性关卡兜底。
 - **hero 食品镜**:优先最完整/有食欲的产品形态 + 轻运镜(切/掰有动作),**别推近怼进质感/剖面**。
 - **真实质感/包装文字 → 动你的真图(image2video)**,别纯生成:海参质感、包装"高小参"字,image2video轻运镜能保住;text2video/重生成必糊。
@@ -389,10 +425,19 @@ python3 run_state.py run/clips reuse S3 --key <key>         # 显式复用片库
 - **★后期特效指令要和贴字一起剔**:"画面叠加白色虚线圆圈圈住…""箭头指向""高亮"这些不是拍出来的,让模型画会画进实拍层。`h3_prompt.py` 的 POST_WORDS 已覆盖。
 - **★敏感词报警要扫【产物】不扫原始分镜表**:着装/贴字/IP 都已在生成时剥离,再扫原文会满屏假警报——**假警报会让人对真警报脱敏,比不报更糟**(08-09 首版实犯)。中英文都要扫(译英后 camisole/syringe 这类中文扫不到)。
 
-## 外部方法论:`seedance-20`(融合进来过,但一直没人用)
+## Seedance 提示词:`seedance-prompt` skill(11-05 官方+第三方已整合)
 
-**副本在 `/mnt/e/jimeng/skills/seedance-20/`**(06-29 拉的 v6.1.0;上游 `Emily2040/seedance-2.0` 已到 **v6.7.0**,
-`references/` 58→86)。09-05 核对发现:它的 15 个核心概念在本仓**零命中** —— 当初融合了,
+**写或改即梦腿(2.0/2.5)提示词前先读 `~/.claude/skills/seedance-prompt/SKILL.md`。** 它合并了火山官方 sd2-pe、sd25-pe、2.5 指南和第三方导演手法,并裁定了互相打架的规则。H3 六段式不归它管。
+
+- **手写或手改的提示词**,提交前跑 `python3 ~/.claude/skills/seedance-prompt/scripts/lint_prompt.py 提示词.txt --line 2.0`。
+- **管线里的提示词**,由 `director.py` 把关,11-05 新增三条:`sd20_no_seconds`(2.0 不写秒数)、`sd20_beat_order`(2.0 长段用镜头顺序)、`dialogue_language`(外语台词写语种)。`beat_timing` 不再管 2.0 段。
+- **模型线由段的 `leg` 判定**:`jimeng`=2.0,`jimeng25`=2.5,`mmh3`=H3。用 `--jimeng-model seedance2.5` 全局切 2.5 时 director 看不到,只有超过 15 秒的段会自动按 2.5 算。
+- **`plan_segments.py` 的生成模板没改**(`{shot_size}{camera},{action}` 开头、`台词{}@音频1`)。按纪律,动生成侧要先单段 A/B。
+- **待验证**:官方 2.0 禁用人物多视图,推荐大头照+全身照;我们 2.3 步的 cast 3:4 六视图是 08-13 实测规格。两者没对照过,先别改,需要时单段 A/B。
+
+### 第三方全量副本
+
+**副本在 `/mnt/e/jimeng/skills/seedance-20/`**(主体 v6.1.0;最常用的 4 份已取到上游 main 09-26 版并进了 seedance-prompt)。09-05 核对发现:它的 15 个核心概念在本仓**零命中** —— 当初融合了,
 但没在任何地方留下入口,等于没有。下面是核过一遍后**确实对得上我们病症**的四块,已摘进来;
 要用全量(directing-engine / retake-protocol / multishot-grammar 等)再去读副本。
 ⚠它全部材料的证据等级是 **field-observed(实践观察)**,不是平台官方保证 —— 和我们自己的实验同级,
@@ -467,6 +512,9 @@ python3 run_state.py run/clips reuse S3 --key <key>         # 显式复用片库
 
 ## 已知坑索引(踩过的)
 
+- **★★即梦 CLI 并发已放开(10-16 实测,推翻 08-09「1 并发」结论)**:seedance2.0_vip 同时提交 6 条全部接受、状态均为 Generating(非排队)。下面所有"VIP并发=1/串行"的条目**以此为准作废**;批量时每段 `--only Sx` 各起一个进程并行。⚠打捞轮询预算已改成和正常生成一致(旧版只等150秒,撞上在跑的任务就重提,白扣积分)。
+- **横屏/无产品段(10-16 祛疣英文CG广告)**:段上写 `"ratio":"16:9"` 出横屏;`"type":"t2v"` 走即梦文生视频(纯原理动画/生活空镜不必硬挂图)。H3 参考图宽高比须在 0.4~2.5,瘦高瓶身图要补白边。英文长词即梦/H3 都会粘性拼错(SALICYLIC→SALCYLIC 连错3卷),H3 用首字母大写写法一次对;H3 产物是 1344×768,装配要 scale+crop 到 1280×720。
+
 - **下载**:`dreamina query_result --download_dir` 会截断成坏文件(NAL错)→ 必须从 `video_url` 直接 urllib 下载(gen_segments 已内置)。
 - **拼接**:异源 mp4 直接 concat 会 NAL 错 → 先逐段归一化(scale+pad720x1280+setsar)再 concat(assemble 已内置)。
 - **口型/音轨**:段配音 pad 到该段视频时长、对齐段起点;别用 `-map` 覆盖乱时轴。
@@ -480,7 +528,7 @@ python3 run_state.py run/clips reuse S3 --key <key>         # 显式复用片库
   → **复刻这类片子绝对不能拆段生成再拼**:一有接缝,说服力就废了。这和我们其它片子"切段生成再装配"的做法完全相反。
   → 于是卡在**单次生成时长上限**:即梦2.0/h3 都是 15 秒,**只有 seedance2.5 能到 30 秒**。所以 **2.5 的第二个定位诞生了:一镜到底且超过 15 秒的片子,它是唯一选项**(不是因为画质,是因为时长)。超过 30 秒的(如 52.9 秒那条)**现有模型做不了**,别硬上。
   → 这类片常还带**变速**("只加速不剪辑"),真实动作时长比片长更长,生成时要么演出快放感、要么正常速度生成再后期加速(后者更可控但要生成更长素材,成本再翻)。
-- **★★切点两道闸(08-10 落地,治 ffmpeg 单阈值的两类错)**:旧架构是 ffmpeg 检切点 → 喂给 Seed 描述,**Seed 的镜数 100% 由 ffmpeg 决定**,它根本没参与判断。两类错都真实发生过:①**漏切**(叠化/软切,大明白测评 118s 只出 4 刀,实为 17) ②**假切**(固定机位+大动作+变速,耶耶大王 15.7s 报 5 刀,实为一镜到底)。
+- **★★切点两道闸(08-10 落地,治 ffmpeg 单阈值的两类错;闸②已在 11-06 改成三帧投票,判据以「反推精度」节为准,下面的两帧裁决是历史)**:旧架构是 ffmpeg 检切点 → 喂给 Seed 描述,**Seed 的镜数 100% 由 ffmpeg 决定**,它根本没参与判断。两类错都真实发生过:①**漏切**(叠化/软切,大明白测评 118s 只出 4 刀,实为 17) ②**假切**(固定机位+大动作+变速,耶耶大王 15.7s 报 5 刀,实为一镜到底)。
   **闸①粗判**:整段视频问 Seed"是不是一镜到底",判是则 cuts=[]。实测耶耶大王/锦鲤快快游都判对,还能读到画面上「全程只加速不剪辑」的自证贴字。
   **闸②裁决**:仅当 0.15 与 0.08 的切点数差 ≥2 倍时触发——低阈值出高召回候选,抽每个候选**前后各0.15秒的两帧**拼编号对照图,问 Seed"真剪辑还是快速动作/遮挡/变速"。
   ★**设计要点:把"时序定位"换成"两帧比对"**。实测让 Seed 自己在时间轴上找切点**不可行**——它按 ~1.07 秒的抽帧节奏报点,73% 的间隔卡在 1.0~1.1s 而真实剪辑只有 5%,±0.2s 命中率仅 21%(±1.0s 的 100% 是假象:真切点平均 1.15 秒一个,乱报也能蹭中)。**时间交给 ffmpeg(帧级精确),判断交给 VLM(语义),各干各的强项。**
