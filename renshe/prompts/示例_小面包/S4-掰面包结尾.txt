@@ -1,0 +1,7 @@
+【生成目标】一条竖屏手机实拍感的短视频，两个镜头：奶奶坐着把一个金黄面包对着镜头掰开展示里面，硬切到她拿着半个面包在茶铺里边走边对镜头说结尾。
+【参考素材职责】{{Node "V3-K4-举面包"}} 是开场画面，人物、服装、面包、茶铺背景都以它为准。{{Node "P13-掰开面包"}} 是面包掰开后里面的样子。{{Node "S5音色参考"}} 只用音色，不用它的台词。
+【主体与关系】她双手握着一个圆面包，离镜头很近，她的脸在面包后面上方。
+【事件脚本】
+镜头一，特写，固定。她两手拇指往外一掰，面包从中间撕开，拉出松软的丝，里面是米白色、多孔、带细小绿点的内芯；她把两半面包凑近镜头慢慢展示，眼睛在面包后面看着镜头，语气认真又热情，使用英语，奶奶说：{Also, the avocado gives you fiber that helps support the good bacteria in your gut, and the Greek yogurt adds beneficial cultures too.}
+硬切。镜头二，中景，手持跟拍，镜头在她前面后退。她一只手拿着半个面包，在茶铺的货架之间朝镜头走过来，边走边说，另一只手自然比划，使用英语，奶奶说：{I share real recipes to boost your health, help with bloating, brain fog, immunity, and just feel better day to day.} 她停下来，对着镜头笑，用拿面包的手点一下镜头，使用英语，奶奶说：{Comment YES if you want more like this, and follow me so you don't miss the next one.}
+【保持一致】同一个金黄芝麻面包。她的脸、红框眼镜、蓝色丝绸立领外套、叠戴在左手腕的玉镯和红珠串、茶铺背景不变，背景能看到小美国国旗。全程英语，声音清楚自然，有起伏，语速正常偏快。手机实拍质感，自然日光，无字幕，无背景音乐。
