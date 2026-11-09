@@ -44,8 +44,8 @@ def grab(video, t, path):
 def detect(wd, batch=8):
     out = os.path.join(wd, "ai_detect.json")
     if os.path.exists(out):
-        return json.load(open(out))
-    shots = json.load(open(os.path.join(wd, "shotlist_full.json")))["shots"]
+        return json.load(open(out, encoding="utf-8"))
+    shots = json.load(open(os.path.join(wd, "shotlist_full.json"), encoding="utf-8"))["shots"]
     video = os.path.join(wd, "src.mp4")
     tmp = tempfile.mkdtemp(prefix="aid_")
     res = []
@@ -71,7 +71,7 @@ def detect(wd, batch=8):
     secs = lambda l: sum(r["end"] - r["start"] for r in res if r["label"] == l)
     r = {"shots": res, "ai_ratio": round(secs("AI") / dur, 3), "real_ratio": round(secs("实拍") / dur, 3),
          "unsure_ratio": round(secs("难判") / dur, 3)}
-    json.dump(r, open(out, "w"), ensure_ascii=False, indent=1)
+    json.dump(r, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     return r
 
 
